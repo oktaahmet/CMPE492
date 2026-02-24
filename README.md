@@ -32,5 +32,6 @@ Note : Private key of the wallet used to send USDC test coins to workers
 # 3. Start Services
 
 Build and start all services with Docker:
-
+```bash
 docker compose up --build
+```
