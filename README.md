@@ -1,10 +1,10 @@
 # CMPE492
 X402 Payment Based WebAssembly Job Workflow Scheduler for Browsers
 
-## Docker Quick Start
+# Docker Quick Start
 
 
-# 1. Create `.env` File
+## 1. Create `.env` File
 
 Create a `.env` file in the project root directory.
 
@@ -14,7 +14,7 @@ You can copy it from the example file:
 .env-example
 ```
 
-# 2. Generate Coinbase CDP API Keys
+## 2. Generate Coinbase CDP API Keys
 
 Go to: https://portal.cdp.coinbase.com/
 
@@ -29,7 +29,7 @@ X402_PAYER_PRIVATE_KEY=your_wallet_private_key_here
 Note : Private key of the wallet used to send USDC test coins to workers
 
 
-# 3. Start Services
+## 3. Start Services
 
 Build and start all services with Docker:
 ```bash
