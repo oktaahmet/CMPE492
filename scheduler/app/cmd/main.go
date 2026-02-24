@@ -14,8 +14,6 @@ import (
 )
 
 func main() {
-	loadEnvFile()
-
 	engine := scheduler.NewEngine(scheduler.Config{
 		ReplicationFactor: loadReplicationFactor(),
 		AssignmentTTL:     30 * time.Second,

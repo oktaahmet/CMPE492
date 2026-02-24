@@ -6,7 +6,6 @@ require (
 	github.com/coinbase/x402/go v0.0.0-20260211184331-65d968c3660a
 	github.com/ethereum/go-ethereum v1.17.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/joho/godotenv v1.5.1
 )
 
 require (

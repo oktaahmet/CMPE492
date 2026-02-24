@@ -3,14 +3,11 @@ package main
 import (
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"x402-scheduler/internal/scheduler"
-
-	"github.com/joho/godotenv"
 )
 
 func loadPaymentProvider() scheduler.PaymentProvider {
@@ -67,15 +64,4 @@ func loadReplicationFactor() int {
 	}
 	log.Printf("replication factor: %d", n)
 	return n
-}
-
-func loadEnvFile() {
-	var path string = filepath.Join("..", "..", ".env")
-	if _, err := os.Stat(path); err != nil {
-		log.Fatalf("failed to load .env file: %v", err)
-	}
-	if err := godotenv.Load(path); err != nil {
-		log.Fatalf("failed to load .env file: %v", err)
-	}
-	log.Printf(".env file loaded from %s", path)
 }
