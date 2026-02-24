@@ -1,0 +1,118 @@
+{
+  "id": "wf-prime-dag-001",
+  "nodes": [
+    {
+      "id": "range-a",
+      "wasm_url": "/prime-example/prime.wasm?v=1",
+      "args": [1, 1000000],
+      "result_schema": {
+        "output": { "type": "number", "required": true }
+      },
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "range-b",
+      "wasm_url": "/prime-example/prime.wasm?v=1",
+      "args": [1000001, 2000000],
+      "result_schema": {
+        "output": { "type": "number", "required": true }
+      },
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "range-c",
+      "wasm_url": "/prime-example/prime.wasm?v=1",
+      "args": [2000001, 3000000],
+      "result_schema": {
+        "output": { "type": "number", "required": true }
+      },
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "range-d",
+      "wasm_url": "/prime-example/prime.wasm?v=1",
+      "args": [3000001, 4000000],
+      "result_schema": {
+        "output": { "type": "number", "required": true }
+      },
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "gaps-a",
+      "depends_on": ["range-a"],
+      "wasm_url": "/prime-example/gaps.wasm?v=1",
+      "args": [1, 1000000],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "gaps-b",
+      "depends_on": ["range-b"],
+      "wasm_url": "/prime-example/gaps.wasm?v=1",
+      "args": [1000001, 2000000],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "gaps-c",
+      "depends_on": ["range-c"],
+      "wasm_url": "/prime-example/gaps.wasm?v=1",
+      "args": [2000001, 3000000],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "gaps-d",
+      "depends_on": ["range-d"],
+      "wasm_url": "/prime-example/gaps.wasm?v=1",
+      "args": [3000001, 4000000],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "stats-a",
+      "depends_on": ["range-a"],
+      "wasm_url": "/prime-example/stats.wasm?v=1",
+      "args": [1, 1000000],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "stats-b",
+      "depends_on": ["range-b"],
+      "wasm_url": "/prime-example/stats.wasm?v=1",
+      "args": [1000001, 2000000],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "stats-c",
+      "depends_on": ["range-c"],
+      "wasm_url": "/prime-example/stats.wasm?v=1",
+      "args": [2000001, 3000000],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "stats-d",
+      "depends_on": ["range-d"],
+      "wasm_url": "/prime-example/stats.wasm?v=1",
+      "args": [3000001, 4000000],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "reduce-gaps",
+      "depends_on": ["gaps-a", "gaps-b", "gaps-c", "gaps-d"],
+      "wasm_url": "/prime-example/reduce_gaps.wasm?v=1",
+      "args": [0, 0],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "reduce-stats",
+      "depends_on": ["stats-a", "stats-b", "stats-c", "stats-d"],
+      "wasm_url": "/prime-example/reduce_stats.wasm?v=1",
+      "args": [0, 0],
+      "reward_usdc": "0.01"
+    },
+    {
+      "id": "final-report",
+      "depends_on": ["reduce-gaps", "reduce-stats"],
+      "wasm_url": "/prime-example/finalize.wasm?v=1",
+      "args": [0, 0],
+      "reward_usdc": "3"
+    }
+  ]
+}
