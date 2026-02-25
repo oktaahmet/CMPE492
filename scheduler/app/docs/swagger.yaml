@@ -1,0 +1,255 @@
+basePath: /
+definitions:
+  main.ProcessPaymentsResponse:
+    properties:
+      processed_count:
+        type: integer
+    type: object
+  main.RegisterWorkerRequest:
+    properties:
+      worker_id:
+        type: string
+    type: object
+  scheduler.Assignment:
+    properties:
+      args:
+        items: {}
+        type: array
+      job_id:
+        type: string
+      node_id:
+        type: string
+      required_rep:
+        type: integer
+      reward_usdc:
+        type: string
+      wasm_url:
+        type: string
+      workflow_id:
+        type: string
+    type: object
+  scheduler.Decision:
+    properties:
+      accepted_payload:
+        additionalProperties: {}
+        type: object
+      accepted_result:
+        type: string
+      accepted_workers:
+        type: integer
+      finalized:
+        type: boolean
+      job_id:
+        type: string
+      required_replicas:
+        type: integer
+    type: object
+  scheduler.PaymentEvent:
+    properties:
+      accepted_hash:
+        type: string
+      amount_usdc:
+        type: string
+      attempts:
+        type: integer
+      id:
+        type: string
+      job_id:
+        type: string
+      last_error:
+        type: string
+      network:
+        type: string
+      payer:
+        type: string
+      status:
+        type: string
+      tx_hash:
+        type: string
+      updated_at:
+        type: string
+      worker_id:
+        type: string
+      workflow_id:
+        type: string
+    type: object
+  scheduler.ResultSubmission:
+    properties:
+      job_id:
+        type: string
+      result_payload:
+        additionalProperties: {}
+        type: object
+      result_sig:
+        type: string
+      worker_id:
+        type: string
+    type: object
+  scheduler.Stats:
+    properties:
+      finalized_jobs:
+        type: integer
+      pending_payments:
+        type: integer
+      queued_jobs:
+        type: integer
+      total_jobs:
+        type: integer
+      workers_online:
+        type: integer
+    type: object
+  scheduler.Worker:
+    properties:
+      connected_at:
+        type: string
+      id:
+        type: string
+      last_heartbeat:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Worker registration, job pull, result submit, payments, stats.
+  title: x402 Scheduler API
+  version: "1.0"
+paths:
+  /api/payments:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/scheduler.PaymentEvent'
+            type: array
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: List payment queue
+      tags:
+      - payments
+  /api/payments/process:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.ProcessPaymentsResponse'
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: Process pending payments
+      tags:
+      - payments
+  /api/pull:
+    get:
+      parameters:
+      - description: Worker ID
+        in: query
+        name: worker_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/scheduler.Assignment'
+        "204":
+          description: No assignment
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: Pull next assignment
+      tags:
+      - workers
+  /api/result:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Result payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/scheduler.ResultSubmission'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/scheduler.Decision'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: Submit job result
+      tags:
+      - jobs
+  /api/stats:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/scheduler.Stats'
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: Scheduler stats snapshot
+      tags:
+      - stats
+  /api/workers/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Worker register request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.RegisterWorkerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/scheduler.Worker'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: Register worker or heartbeat
+      tags:
+      - workers
+swagger: "2.0"
