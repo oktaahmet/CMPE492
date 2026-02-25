@@ -35,6 +35,8 @@ Build and start all services with Docker:
 ```bash
 docker compose up --build
 ```
+## 4. Open the web page
+http://localhost:5173/
 
-## 4. API documentation
+## API documentation
 See at: http://localhost:8080/api/docs/
