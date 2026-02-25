@@ -35,3 +35,6 @@ Build and start all services with Docker:
 ```bash
 docker compose up --build
 ```
+
+## 4. API documentation
+See at: http://localhost:8080/api/docs/
