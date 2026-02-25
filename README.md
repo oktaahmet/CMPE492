@@ -22,7 +22,7 @@ CDP_API_KEY_ID=your_api_key_here
 CDP_PRIVATE_KEY=your_secret_key_here  
 X402_PAYER_PRIVATE_KEY=your_wallet_private_key_here
 
-Note : Private key of the wallet used to send USDC test coins to workers, you can get some test USDC here(select base sepolia network):  https://faucet.circle.com/
+Note : Private key of the wallet used to send USDC test coins to workers, you can get some test USDC here(select Base Sepolia network):  https://faucet.circle.com/
 
 
 ## 3. Start Services
