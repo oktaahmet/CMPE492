@@ -8,11 +8,7 @@ X402 Payment Based WebAssembly Job Workflow Scheduler for Browsers
 
 Create a `.env` file in the project root directory.
 
-You can copy it from the example file:
-
-```bash
-.env-example
-```
+You can copy it from the `.env-example` file
 
 ## 2. Generate Coinbase CDP API Keys
 
