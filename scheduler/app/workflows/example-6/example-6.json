@@ -1,0 +1,36 @@
+{
+  "id": "wf-web-snapshot-analytics-006",
+  "nodes": [
+    {
+      "id": "crawl-news-snapshot",
+      "wasm_url": "/example-6/crawl_news_snapshot.wasm?v=1",
+      "args": [
+        {
+          "seed": 20260301,
+          "target_bytes": 1400000,
+          "domains": 3,
+          "bias_ai": 37
+        }
+      ],
+      "result_schema": {
+        "output": { "type": "string", "required": true }
+      },
+      "reward_usdc": "0.12"
+    },
+    {
+      "id": "analyze-news-snapshot",
+      "depends_on": ["crawl-news-snapshot"],
+      "wasm_url": "/example-6/analyze_news_snapshot.wasm?v=1",
+      "args": [
+        {
+          "passes": 2,
+          "window": 211
+        }
+      ],
+      "result_schema": {
+        "output": { "type": "string", "required": true }
+      },
+      "reward_usdc": "0.38"
+    }
+  ]
+}

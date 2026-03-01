@@ -2,7 +2,7 @@ services:
   db:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: vn_engine_db
+      POSTGRES_DB: x402_scheduler_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     volumes:

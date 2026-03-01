@@ -1,15 +1,36 @@
 export type JsonObject = Record<string, unknown>;
 
+export type DependencyRef = {
+  workflow_id: string;
+  node_id: string;
+};
+
 export type Assignment = {
   job_id: string;
+  workflow_id: string;
+  node_id: string;
   wasm_url: string;
   args?: unknown[];
+  dependencies?: DependencyRef[];
   [key: string]: unknown;
 };
 
 export type Decision = {
   finalized: boolean;
   [key: string]: unknown;
+};
+
+export type WorkflowNodeOutputChunk = {
+  mode: "array" | "string" | "json" | "missing";
+  offset: number;
+  limit: number;
+  next_offset?: number;
+  done: boolean;
+  total_items?: number;
+  total_chars?: number;
+  items?: unknown[];
+  data?: string;
+  value?: unknown;
 };
 
 export async function registerWorker(workerID: string): Promise<unknown> {
@@ -35,6 +56,40 @@ export async function pullAssignment(workerID: string): Promise<Assignment | nul
     throw new Error(`pull failed: ${response.status}`);
   }
   return (await response.json()) as Assignment;
+}
+
+export async function fetchWorkflowNodeOutput(
+  workflowID: string,
+  nodeID: string,
+): Promise<JsonObject> {
+  const qs = new URLSearchParams({
+    workflow_id: workflowID,
+    node_id: nodeID,
+  });
+  const response = await fetch(`/api/workflow/node-output?${qs.toString()}`);
+  if (!response.ok) {
+    throw new Error(`workflow node output fetch failed: ${response.status}`);
+  }
+  return (await response.json()) as JsonObject;
+}
+
+export async function fetchWorkflowNodeOutputChunk(
+  workflowID: string,
+  nodeID: string,
+  offset = 0,
+  limit = 256,
+): Promise<WorkflowNodeOutputChunk> {
+  const qs = new URLSearchParams({
+    workflow_id: workflowID,
+    node_id: nodeID,
+    offset: String(offset),
+    limit: String(limit),
+  });
+  const response = await fetch(`/api/workflow/node-output/chunk?${qs.toString()}`);
+  if (!response.ok) {
+    throw new Error(`workflow node output chunk fetch failed: ${response.status}`);
+  }
+  return (await response.json()) as WorkflowNodeOutputChunk;
 }
 
 export async function submitResult(

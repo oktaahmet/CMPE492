@@ -1,5 +1,27 @@
 basePath: /
 definitions:
+  main.NodeOutputChunkResponse:
+    properties:
+      data:
+        type: string
+      done:
+        type: boolean
+      items:
+        items: {}
+        type: array
+      limit:
+        type: integer
+      mode:
+        type: string
+      next_offset:
+        type: integer
+      offset:
+        type: integer
+      total_chars:
+        type: integer
+      total_items:
+        type: integer
+    type: object
   main.ProcessPaymentsResponse:
     properties:
       processed_count:
@@ -10,10 +32,57 @@ definitions:
       worker_id:
         type: string
     type: object
+  main.adminWorkflowActivateRequest:
+    properties:
+      reset_state:
+        type: boolean
+      workflow_id:
+        type: string
+    type: object
+  main.adminWorkflowActivateResponse:
+    properties:
+      enqueued_jobs:
+        type: integer
+      recovered_nodes:
+        type: integer
+      reset_state:
+        type: boolean
+      topological_size:
+        type: integer
+      workflow_id:
+        type: string
+    type: object
+  main.adminWorkflowDeleteRequest:
+    properties:
+      workflow_id:
+        type: string
+    type: object
+  main.adminWorkflowDeleteResponse:
+    properties:
+      deleted:
+        type: boolean
+      workflow_id:
+        type: string
+    type: object
+  main.adminWorkflowListResponse:
+    properties:
+      active_workflow_id:
+        type: string
+      loaded_workflow_id:
+        type: string
+      uploaded_ids:
+        items:
+          type: string
+        type: array
+    type: object
   scheduler.Assignment:
     properties:
       args:
         items: {}
+        type: array
+      dependencies:
+        items:
+          $ref: '#/definitions/scheduler.DependencyRef'
         type: array
       job_id:
         type: string
@@ -43,6 +112,13 @@ definitions:
         type: string
       required_replicas:
         type: integer
+    type: object
+  scheduler.DependencyRef:
+    properties:
+      node_id:
+        type: string
+      workflow_id:
+        type: string
     type: object
   scheduler.PaymentEvent:
     properties:
@@ -114,6 +190,155 @@ info:
   title: x402 Scheduler API
   version: "1.0"
 paths:
+  /api/admin/workflows:
+    get:
+      parameters:
+      - description: Bearer admin token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.adminWorkflowListResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: List workflows and active workflow id
+      tags:
+      - admin
+  /api/admin/workflows/activate:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Bearer admin token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Activate request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.adminWorkflowActivateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.adminWorkflowActivateResponse'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: Activate workflow by id
+      tags:
+      - admin
+  /api/admin/workflows/delete:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Bearer admin token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Delete request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.adminWorkflowDeleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.adminWorkflowDeleteResponse'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: Delete uploaded workflow and its persisted state
+      tags:
+      - admin
+  /api/admin/workflows/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Bearer admin token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Workflow JSON file
+        in: formData
+        name: workflow_json
+        required: true
+        type: file
+      - description: One or more C++ files (.cpp)
+        in: formData
+        name: cpp_files
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+        "409":
+          description: Conflict
+          schema:
+            type: string
+      summary: Upload workflow JSON and C++ sources
+      tags:
+      - admin
   /api/payments:
     get:
       produces:
@@ -252,4 +477,83 @@ paths:
       summary: Register worker or heartbeat
       tags:
       - workers
+  /api/workflow/node-output:
+    get:
+      parameters:
+      - description: Workflow ID
+        in: query
+        name: workflow_id
+        required: true
+        type: string
+      - description: Node ID
+        in: query
+        name: node_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: Get finalized workflow node output
+      tags:
+      - workflow
+  /api/workflow/node-output/chunk:
+    get:
+      parameters:
+      - description: Workflow ID
+        in: query
+        name: workflow_id
+        required: true
+        type: string
+      - description: Node ID
+        in: query
+        name: node_id
+        required: true
+        type: string
+      - description: Chunk offset
+        in: query
+        name: offset
+        type: integer
+      - description: Chunk size
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.NodeOutputChunkResponse'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+        "405":
+          description: Method Not Allowed
+          schema:
+            type: string
+      summary: Get chunk of finalized workflow node output
+      tags:
+      - workflow
 swagger: "2.0"

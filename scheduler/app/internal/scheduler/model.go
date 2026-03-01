@@ -8,8 +8,14 @@ type Job struct {
 	NodeID       string                      `json:"node_id"`
 	WasmURL      string                      `json:"wasm_url"`
 	Args         []any                       `json:"args,omitempty"`
+	Dependencies []DependencyRef             `json:"dependencies,omitempty"`
 	ResultSchema map[string]PayloadFieldRule `json:"result_schema,omitempty"`
 	RewardUSDC   string                      `json:"reward_usdc"`
+}
+
+type DependencyRef struct {
+	WorkflowID string `json:"workflow_id"`
+	NodeID     string `json:"node_id"`
 }
 
 type PayloadFieldRule struct {
