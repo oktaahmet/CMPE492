@@ -5,13 +5,14 @@ self.onmessage = async (event) => {
   try {
     const wasmURL = req.wasm_url;
     const args = Array.isArray(req.args) ? req.args : [];
+    const inputContext = req.input_context && typeof req.input_context === "object" ? req.input_context : {};
     if (!wasmURL) {
       throw new Error("wasm_url missing");
     }
 
     const bytes = await fetchWasmBytes(wasmURL);
-    const { output, mode } = await runWasm(bytes, args);
-    const resultSig = await sha256Hex(JSON.stringify({ output, args, mode }));
+    const { output, mode } = await runWasm(bytes, args, inputContext);
+    const resultSig = await sha256Hex(JSON.stringify({ output, args, inputContext, mode }));
 
     self.postMessage({
       req_id: reqID,
@@ -35,15 +36,67 @@ async function fetchWasmBytes(url) {
   return res.arrayBuffer();
 }
 
-async function runWasm(wasmBytes, args) {
+async function runWasm(wasmBytes, args, inputContext) {
   let mod;
   try {
-    mod = await WebAssembly.instantiate(wasmBytes, {});
+    mod = await WebAssembly.instantiate(wasmBytes, createImportObject());
   } catch (err) {
     throw new Error(`wasm instantiate failed: ${String(err)}`);
   }
 
-  return executeRun(mod.instance.exports || {}, args);
+  const exports = mod.instance.exports || {};
+  if (canRunJSON(exports)) {
+    return executeRunJSON(exports, inputContext);
+  }
+  return executeRun(exports, args);
+}
+
+function createImportObject() {
+  const noop = () => 0;
+  const env = {
+    abort: noop,
+    emscripten_notify_memory_growth: noop,
+    emscripten_memcpy_big: noop,
+  };
+  const wasi = {
+    args_get: noop,
+    args_sizes_get: noop,
+    environ_get: noop,
+    environ_sizes_get: noop,
+    fd_close: noop,
+    fd_fdstat_get: noop,
+    fd_seek: noop,
+    fd_write: noop,
+    clock_time_get: noop,
+    random_get: noop,
+    proc_exit: (code) => {
+      throw new Error(`wasi proc_exit(${Number(code) || 0})`);
+    },
+  };
+
+  const proxy = new Proxy(wasi, {
+    get(target, prop) {
+      if (typeof prop === "string" && !(prop in target)) {
+        return noop;
+      }
+      return target[prop];
+    },
+  });
+
+  const envProxy = new Proxy(env, {
+    get(target, prop) {
+      if (typeof prop === "string" && !(prop in target)) {
+        return noop;
+      }
+      return target[prop];
+    },
+  });
+
+  return {
+    env: envProxy,
+    wasi_snapshot_preview1: proxy,
+    wasi_unstable: proxy,
+  };
 }
 
 function executeRun(exports, args) {
@@ -57,6 +110,57 @@ function executeRun(exports, args) {
     callArgs[i] = toInt(args[i], 0);
   }
   return { output: fn(...callArgs), mode: `run(${callArgs.join(",")})` };
+}
+
+function canRunJSON(exports) {
+  return (
+    typeof exports.run_json === "function" &&
+    typeof exports.get_input_ptr === "function" &&
+    typeof exports.get_input_capacity === "function" &&
+    typeof exports.get_output_ptr === "function" &&
+    typeof exports.get_output_len === "function" &&
+    exports.memory instanceof WebAssembly.Memory
+  );
+}
+
+function executeRunJSON(exports, inputContext) {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const jsonText = JSON.stringify(inputContext || {});
+  const inputBytes = encoder.encode(jsonText);
+
+  let mem = new Uint8Array(exports.memory.buffer);
+  const inputPtr = toInt(exports.get_input_ptr(), 0);
+  const inputCap = toInt(exports.get_input_capacity(), 0);
+  if (inputPtr <= 0 || inputCap <= 0) {
+    throw new Error("run_json ABI invalid input buffer");
+  }
+  if (inputBytes.length > inputCap) {
+    throw new Error(`run_json input too large: ${inputBytes.length} > ${inputCap}`);
+  }
+
+  mem.set(inputBytes, inputPtr);
+  const rc = toInt(exports.run_json(inputBytes.length), -1);
+  if (rc !== 0) {
+    throw new Error(`run_json returned non-zero status: ${rc}`);
+  }
+
+  mem = new Uint8Array(exports.memory.buffer);
+  const outPtr = toInt(exports.get_output_ptr(), 0);
+  const outLen = toInt(exports.get_output_len(), 0);
+  if (outPtr <= 0 || outLen < 0 || outPtr + outLen > mem.length) {
+    throw new Error("run_json ABI invalid output buffer");
+  }
+
+  const outBytes = mem.slice(outPtr, outPtr + outLen);
+  const outText = decoder.decode(outBytes);
+  let output;
+  try {
+    output = JSON.parse(outText);
+  } catch {
+    output = outText;
+  }
+  return { output, mode: `run_json(${inputBytes.length}B)` };
 }
 
 function toInt(value, fallback) {

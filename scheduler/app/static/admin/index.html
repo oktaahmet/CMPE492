@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Scheduler Admin</title>
+    <style>
+      :root {
+        --bg: #f4f7fb;
+        --card: #ffffff;
+        --border: #d9e2ec;
+        --text: #1f2937;
+        --muted: #6b7280;
+        --primary: #2563eb;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        padding: 20px;
+      }
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 14px;
+      }
+      h1, h2 {
+        margin: 0 0 10px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      input, select {
+        padding: 8px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+      }
+      input[type="text"], input[type="password"], select {
+        min-width: 260px;
+      }
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 8px 12px;
+        color: #fff;
+        background: var(--primary);
+        cursor: pointer;
+      }
+      .secondary {
+        background: #4b5563;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      pre {
+        margin: 0;
+        background: #0f172a;
+        color: #dbeafe;
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 170px;
+        white-space: pre-wrap;
+      }
+      #adminPanel {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <h1>Workflow Admin</h1>
+        <p class="muted">This page is for organization admins only.</p>
+      </div>
+
+      <div class="card" id="authCard">
+        <h2>Admin Token</h2>
+        <div class="row">
+          <input id="tokenInput" type="password" placeholder="ADMIN_API_TOKEN" />
+          <button id="unlockBtn" type="button">Unlock</button>
+        </div>
+        <p class="muted">Token is verified via <code>/api/admin/workflows</code>.</p>
+      </div>
+
+      <div id="adminPanel">
+        <div class="card">
+          <h2>Upload Workflow</h2>
+          <div class="row">
+            <label>Workflow JSON:</label>
+            <input id="workflowJsonInput" type="file" accept=".json,application/json" />
+          </div>
+          <div class="row">
+            <label>C++ files:</label>
+            <input id="cppFilesInput" type="file" accept=".cpp" multiple />
+          </div>
+          <div class="row">
+            <button id="uploadBtn" type="button">Upload</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Select Active Workflow</h2>
+          <div class="row">
+            <select id="workflowSelect"></select>
+            <button id="activateBtn" type="button">Activate</button>
+            <button id="deleteBtn" type="button" class="secondary">Delete</button>
+            <button id="refreshBtn" type="button" class="secondary">Refresh</button>
+          </div>
+          <div class="row">
+            <label>
+              <input id="resetStateInput" type="checkbox" />
+              Reset DB node state before activate
+            </label>
+          </div>
+          <p class="muted" id="statusLine"></p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Output</h2>
+        <pre id="output">Ready.</pre>
+      </div>
+    </div>
+
+    <script>
+      const tokenInput = document.getElementById("tokenInput");
+      const unlockBtn = document.getElementById("unlockBtn");
+      const adminPanel = document.getElementById("adminPanel");
+      const workflowSelect = document.getElementById("workflowSelect");
+      const workflowJsonInput = document.getElementById("workflowJsonInput");
+      const cppFilesInput = document.getElementById("cppFilesInput");
+      const uploadBtn = document.getElementById("uploadBtn");
+      const activateBtn = document.getElementById("activateBtn");
+      const deleteBtn = document.getElementById("deleteBtn");
+      const refreshBtn = document.getElementById("refreshBtn");
+      const resetStateInput = document.getElementById("resetStateInput");
+      const output = document.getElementById("output");
+      const statusLine = document.getElementById("statusLine");
+
+      let adminToken = "";
+
+      function show(value) {
+        output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+      }
+
+      function authHeaders(extra) {
+        return Object.assign(
+          {
+            Authorization: `Bearer ${adminToken}`,
+          },
+          extra || {}
+        );
+      }
+
+      async function api(url, init) {
+        const response = await fetch(
+          url,
+          Object.assign({}, init || {}, {
+            headers: authHeaders((init && init.headers) || {}),
+          })
+        );
+
+        const text = await response.text();
+        if (!response.ok) {
+          throw new Error(`${response.status} ${text}`);
+        }
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text;
+        }
+      }
+
+      function setWorkflowOptions(ids, preferredID) {
+        workflowSelect.innerHTML = "";
+        if (!ids || ids.length === 0) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "No workflow found";
+          workflowSelect.appendChild(option);
+          return;
+        }
+        ids.forEach((id) => {
+          const option = document.createElement("option");
+          option.value = id;
+          option.textContent = id;
+          workflowSelect.appendChild(option);
+        });
+        if (preferredID && ids.includes(preferredID)) {
+          workflowSelect.value = preferredID;
+        }
+      }
+
+      async function refreshWorkflows() {
+        const data = await api("/api/admin/workflows");
+        const preferredID = data.active_workflow_id || data.loaded_workflow_id || "";
+        setWorkflowOptions(data.uploaded_ids || [], preferredID);
+        statusLine.textContent = `active=${data.active_workflow_id || "-"} | loaded=${data.loaded_workflow_id || "-"}`;
+        show(data);
+      }
+
+      async function unlock() {
+        const token = tokenInput.value.trim();
+        if (!token) {
+          show("Token is required.");
+          return;
+        }
+        adminToken = token;
+        try {
+          await refreshWorkflows();
+          adminPanel.style.display = "block";
+          show("Admin unlocked.");
+        } catch (err) {
+          adminToken = "";
+          show(String(err));
+        }
+      }
+
+      async function uploadWorkflow() {
+        if (!adminToken) {
+          show("Unlock first.");
+          return;
+        }
+        const workflowJSON = workflowJsonInput.files[0];
+        if (!workflowJSON) {
+          show("workflow_json file is required.");
+          return;
+        }
+        const cppFiles = cppFilesInput.files;
+        if (!cppFiles || cppFiles.length === 0) {
+          show("At least one .cpp file is required.");
+          return;
+        }
+
+        const form = new FormData();
+        form.append("workflow_json", workflowJSON);
+        for (const file of cppFiles) {
+          form.append("cpp_files", file);
+        }
+
+        try {
+          const data = await api("/api/admin/workflows/upload", {
+            method: "POST",
+            body: form,
+          });
+          show(data);
+          await refreshWorkflows();
+        } catch (err) {
+          show(String(err));
+        }
+      }
+
+      async function activateWorkflow() {
+        if (!adminToken) {
+          show("Unlock first.");
+          return;
+        }
+        const workflowID = workflowSelect.value;
+        if (!workflowID) {
+          show("Select a workflow.");
+          return;
+        }
+
+        try {
+          const data = await api("/api/admin/workflows/activate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              workflow_id: workflowID,
+              reset_state: Boolean(resetStateInput.checked),
+            }),
+          });
+          show(data);
+          await refreshWorkflows();
+        } catch (err) {
+          show(String(err));
+        }
+      }
+
+      async function deleteWorkflow() {
+        if (!adminToken) {
+          show("Unlock first.");
+          return;
+        }
+        const workflowID = workflowSelect.value;
+        if (!workflowID) {
+          show("Select a workflow.");
+          return;
+        }
+        if (!window.confirm(`Delete workflow ${workflowID}? This removes uploaded workflow files and DB node state.`)) {
+          return;
+        }
+
+        try {
+          const data = await api("/api/admin/workflows/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflow_id: workflowID }),
+          });
+          show(data);
+          await refreshWorkflows();
+        } catch (err) {
+          show(String(err));
+        }
+      }
+
+      unlockBtn.addEventListener("click", () => {
+        void unlock();
+      });
+      uploadBtn.addEventListener("click", () => {
+        void uploadWorkflow();
+      });
+      activateBtn.addEventListener("click", () => {
+        void activateWorkflow();
+      });
+      deleteBtn.addEventListener("click", () => {
+        void deleteWorkflow();
+      });
+      refreshBtn.addEventListener("click", () => {
+        void refreshWorkflows().catch((err) => show(String(err)));
+      });
+    </script>
+  </body>
+</html>

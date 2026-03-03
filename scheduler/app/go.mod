@@ -6,6 +6,7 @@ require (
 	github.com/coinbase/x402/go v0.0.0-20260211184331-65d968c3660a
 	github.com/ethereum/go-ethereum v1.17.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/lib/pq v1.10.9
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.6
 )

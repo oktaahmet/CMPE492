@@ -56,7 +56,19 @@ func NewWorkflowManager() *WorkflowManager {
 	}
 }
 
+func ValidateWorkflowSpec(spec WorkflowSpec) (WorkflowSpec, error) {
+	normalized, _, _, err := normalizeAndValidateWorkflow(spec)
+	if err != nil {
+		return WorkflowSpec{}, err
+	}
+	return normalized, nil
+}
+
 func (m *WorkflowManager) LoadWorkflow(spec WorkflowSpec) (WorkflowLoadResult, []Job, error) {
+	return m.LoadWorkflowWithCompleted(spec, nil)
+}
+
+func (m *WorkflowManager) LoadWorkflowWithCompleted(spec WorkflowSpec, completed map[string]map[string]any) (WorkflowLoadResult, []Job, error) {
 	normalized, nodesByID, topo, err := normalizeAndValidateWorkflow(spec)
 	if err != nil {
 		return WorkflowLoadResult{}, nil, err
@@ -78,12 +90,20 @@ func (m *WorkflowManager) LoadWorkflow(spec WorkflowSpec) (WorkflowLoadResult, [
 		enqueued:         map[string]bool{},
 	}
 
+	for nodeID, output := range completed {
+		if _, exists := runtime.nodesByID[nodeID]; !exists {
+			continue
+		}
+		runtime.completed[nodeID] = true
+		runtime.completedOutputs[nodeID] = cloneJSONMap(output)
+	}
+
 	ready := readyNodesLocked(runtime)
 	jobs := make([]Job, 0, len(ready))
 	jobIDs := make([]string, 0, len(ready))
 	for _, nodeID := range ready {
 		node := runtime.nodesByID[nodeID]
-		job := jobFromNode(normalized.ID, node)
+		job := jobFromNode(runtime, node)
 		jobs = append(jobs, job)
 		jobIDs = append(jobIDs, job.ID)
 		runtime.enqueued[nodeID] = true
@@ -104,6 +124,25 @@ func (m *WorkflowManager) DeleteWorkflow(workflowID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deleteWorkflowLocked(workflowID)
+}
+
+func (m *WorkflowManager) HasWorkflow(workflowID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.workflows[workflowID]
+	return ok
+}
+
+func (m *WorkflowManager) WorkflowIDs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ids := make([]string, 0, len(m.workflows))
+	for id := range m.workflows {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (m *WorkflowManager) OnJobFinalized(jobID string, output map[string]any) ([]Job, error) {
@@ -132,7 +171,7 @@ func (m *WorkflowManager) OnJobFinalized(jobID string, output map[string]any) ([
 	nextJobs := make([]Job, 0, len(ready))
 	for _, nodeID := range ready {
 		node := runtime.nodesByID[nodeID]
-		job := jobFromNode(runtime.spec.ID, node)
+		job := jobFromNode(runtime, node)
 		nextJobs = append(nextJobs, job)
 		runtime.enqueued[nodeID] = true
 		m.jobToNode[job.ID] = jobRef{
@@ -174,16 +213,65 @@ func readyNodesLocked(runtime *workflowRuntime) []string {
 	return ready
 }
 
-func jobFromNode(workflowID string, node WorkflowNode) Job {
+func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 	args := append([]any(nil), node.Args...)
+	args = appendDependencyScalarArgs(args, runtime.completedOutputs, node.DependsOn)
+
+	deps := make([]DependencyRef, 0, len(node.DependsOn))
+	for _, depID := range node.DependsOn {
+		deps = append(deps, DependencyRef{
+			WorkflowID: runtime.spec.ID,
+			NodeID:     depID,
+		})
+	}
+
 	return Job{
-		ID:           jobID(workflowID, node.ID),
-		WorkflowID:   workflowID,
+		ID:           jobID(runtime.spec.ID, node.ID),
+		WorkflowID:   runtime.spec.ID,
 		NodeID:       node.ID,
 		WasmURL:      node.WasmURL,
 		Args:         args,
+		Dependencies: deps,
 		ResultSchema: node.ResultSchema,
 		RewardUSDC:   node.RewardUSDC,
+	}
+}
+
+func appendDependencyScalarArgs(
+	args []any,
+	completedOutputs map[string]map[string]any,
+	dependsOn []string,
+) []any {
+	if len(dependsOn) == 0 {
+		return args
+	}
+
+	out := append([]any(nil), args...)
+	for _, depID := range dependsOn {
+		payload := completedOutputs[depID]
+		if payload == nil {
+			continue
+		}
+		value, exists := payload["output"]
+		if !exists {
+			continue
+		}
+		if isScalarArg(value) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func isScalarArg(value any) bool {
+	switch value.(type) {
+	case nil, bool, string,
+		float64, float32,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64:
+		return true
+	default:
+		return false
 	}
 }
 

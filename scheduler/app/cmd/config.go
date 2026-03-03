@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -63,5 +64,74 @@ func loadReplicationFactor() int {
 		return 1
 	}
 	log.Printf("replication factor: %d", n)
+	return n
+}
+
+func loadPostgresDSN() string {
+	if raw := strings.TrimSpace(os.Getenv("DATABASE_URL")); raw != "" {
+		return raw
+	}
+
+	host := strings.TrimSpace(os.Getenv("POSTGRES_HOST"))
+	if host == "" {
+		host = "db"
+	}
+
+	port := strings.TrimSpace(os.Getenv("POSTGRES_PORT"))
+	if port == "" {
+		port = "5432"
+	}
+
+	user := strings.TrimSpace(os.Getenv("POSTGRES_USER"))
+	if user == "" {
+		user = "postgres"
+	}
+
+	password := strings.TrimSpace(os.Getenv("POSTGRES_PASSWORD"))
+	if password == "" {
+		password = "postgres"
+	}
+
+	dbname := strings.TrimSpace(os.Getenv("POSTGRES_DB"))
+	if dbname == "" {
+		dbname = "x402_scheduler_db"
+	}
+
+	sslmode := strings.TrimSpace(os.Getenv("POSTGRES_SSLMODE"))
+	if sslmode == "" {
+		sslmode = "disable"
+	}
+
+	return fmt.Sprintf(
+		"postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		user,
+		password,
+		host,
+		port,
+		dbname,
+		sslmode,
+	)
+}
+
+func loadAdminAPIToken() string {
+	return strings.TrimSpace(os.Getenv("ADMIN_API_TOKEN"))
+}
+
+func loadMaxResultPayloadBytes() int64 {
+	const defaultLimit = int64(10 * 1024 * 1024) // 10 MiB
+
+	raw := strings.TrimSpace(os.Getenv("MAX_RESULT_PAYLOAD_BYTES"))
+	if raw == "" {
+		log.Printf("max result payload bytes: %d (default)", defaultLimit)
+		return defaultLimit
+	}
+
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 1024 {
+		log.Printf("invalid MAX_RESULT_PAYLOAD_BYTES=%q, using %d", raw, defaultLimit)
+		return defaultLimit
+	}
+
+	log.Printf("max result payload bytes: %d", n)
 	return n
 }

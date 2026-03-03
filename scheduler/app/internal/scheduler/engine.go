@@ -44,13 +44,14 @@ type jobState struct {
 }
 
 type Assignment struct {
-	JobID       string         `json:"job_id"`
-	WorkflowID  string         `json:"workflow_id"`
-	NodeID      string         `json:"node_id"`
-	WasmURL     string         `json:"wasm_url"`
-	Args        []any          `json:"args,omitempty"`
-	RewardUSDC  string         `json:"reward_usdc"`
-	RequiredRep int            `json:"required_rep"`
+	JobID        string          `json:"job_id"`
+	WorkflowID   string          `json:"workflow_id"`
+	NodeID       string          `json:"node_id"`
+	WasmURL      string          `json:"wasm_url"`
+	Args         []any           `json:"args,omitempty"`
+	Dependencies []DependencyRef `json:"dependencies,omitempty"`
+	RewardUSDC   string          `json:"reward_usdc"`
+	RequiredRep  int             `json:"required_rep"`
 }
 
 type ResultSubmission struct {
@@ -162,13 +163,14 @@ func (e *Engine) AssignNext(workerID string) (Assignment, bool) {
 
 		state.assignments[workerID] = time.Now()
 		return Assignment{
-			JobID:       state.job.ID,
-			WorkflowID:  state.job.WorkflowID,
-			NodeID:      state.job.NodeID,
-			WasmURL:     state.job.WasmURL,
-			Args:        append([]any(nil), state.job.Args...),
-			RewardUSDC:  state.job.RewardUSDC,
-			RequiredRep: e.cfg.ReplicationFactor,
+			JobID:        state.job.ID,
+			WorkflowID:   state.job.WorkflowID,
+			NodeID:       state.job.NodeID,
+			WasmURL:      state.job.WasmURL,
+			Args:         append([]any(nil), state.job.Args...),
+			Dependencies: append([]DependencyRef(nil), state.job.Dependencies...),
+			RewardUSDC:   state.job.RewardUSDC,
+			RequiredRep:  e.cfg.ReplicationFactor,
 		}, true
 	}
 
@@ -247,6 +249,75 @@ func (e *Engine) PaymentQueueSnapshot() []PaymentEvent {
 	out := make([]PaymentEvent, len(e.paymentEvents))
 	copy(out, e.paymentEvents)
 	return out
+}
+
+func (e *Engine) RestorePendingPayments(events []PaymentEvent) {
+	if len(events) == 0 {
+		return
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	seen := make(map[string]bool, len(e.paymentEvents))
+	for _, event := range e.paymentEvents {
+		seen[event.ID] = true
+	}
+
+	for _, event := range events {
+		if event.Status != "pending_x402_transfer" && event.Status != "retry" {
+			continue
+		}
+		if seen[event.ID] {
+			continue
+		}
+		e.paymentEvents = append(e.paymentEvents, event)
+		seen[event.ID] = true
+	}
+}
+
+func (e *Engine) JobIdentity(jobID string) (workflowID string, nodeID string, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	state := e.jobs[jobID]
+	if state == nil {
+		return "", "", false
+	}
+	return state.job.WorkflowID, state.job.NodeID, true
+}
+
+func (e *Engine) RemoveWorkflowJobs(workflowID string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if strings.TrimSpace(workflowID) == "" {
+		return 0
+	}
+
+	removed := 0
+	for jobID, state := range e.jobs {
+		if state == nil || state.job.WorkflowID != workflowID {
+			continue
+		}
+		if state.finalized && e.finalizedJobs > 0 {
+			e.finalizedJobs--
+		}
+		delete(e.jobs, jobID)
+		removed++
+	}
+	if removed == 0 {
+		return 0
+	}
+
+	out := make([]string, 0, len(e.queue))
+	for _, id := range e.queue {
+		if st := e.jobs[id]; st != nil {
+			out = append(out, id)
+		}
+	}
+	e.queue = out
+	return removed
 }
 
 func (e *Engine) RegisterOrHeartbeat(workerID string) Worker {
