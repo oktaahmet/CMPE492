@@ -20,6 +20,22 @@ export type Decision = {
   [key: string]: unknown;
 };
 
+export type PaymentEvent = {
+  id: string;
+  job_id: string;
+  workflow_id: string;
+  amount_usdc: string;
+  worker_id: string;
+  accepted_hash: string;
+  status: string;
+  attempts: number;
+  last_error?: string;
+  updated_at: string;
+  tx_hash?: string;
+  network?: string;
+  payer?: string;
+};
+
 export type WorkflowNodeOutputChunk = {
   mode: "array" | "string" | "json" | "missing";
   offset: number;
@@ -132,10 +148,15 @@ export async function fetchStats(): Promise<unknown> {
   return response.json();
 }
 
-export async function fetchPayments(): Promise<unknown> {
-  const response = await fetch("/api/payments");
+export async function fetchPayments(workerID?: string): Promise<PaymentEvent[]> {
+  const qs = new URLSearchParams();
+  if (workerID && workerID.trim() !== "") {
+    qs.set("worker_id", workerID.trim());
+  }
+  const suffix = qs.toString();
+  const response = await fetch(`/api/payments${suffix ? `?${suffix}` : ""}`);
   if (!response.ok) {
     throw new Error(`payments failed: ${response.status}`);
   }
-  return response.json();
+  return (await response.json()) as PaymentEvent[];
 }

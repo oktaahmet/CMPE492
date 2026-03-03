@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, Play, Square, Wallet, Waves, Database, ClipboardList } from "lucide-react";
+import { Activity, Play, Square, Wallet, Waves, ClipboardList } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchPayments, fetchStats, registerWorker } from "./lib/api";
+import { fetchStats, registerWorker } from "./lib/api";
+import { PaymentsHistoryPage } from "./components/payments-history-page";
 import { runWorkerOnce } from "./lib/worker-loop";
 
 type EIP1193RequestArgs = {
@@ -48,6 +49,9 @@ function safeStringify(value: unknown): string {
 }
 
 export default function App() {
+  const [route, setRoute] = useState<"worker" | "payments">(
+    window.location.hash === "#/payments" ? "payments" : "worker",
+  );
   const [assignmentText, setAssignmentText] = useState("");
   const [logText, setLogText] = useState("");
   const [workerId, setWorkerId] = useState("");
@@ -79,6 +83,14 @@ export default function App() {
       default:
         return "secondary" as const;
     }
+  };
+
+  const navigate = (next: "worker" | "payments") => {
+    if (next === "payments") {
+      window.location.hash = "/payments";
+      return;
+    }
+    window.location.hash = "/";
   };
 
   const detectProvider = () => {
@@ -231,6 +243,17 @@ export default function App() {
     };
   }, [log]);
 
+  useEffect(() => {
+    const syncRoute = () => {
+      setRoute(window.location.hash === "#/payments" ? "payments" : "worker");
+    };
+    window.addEventListener("hashchange", syncRoute);
+    syncRoute();
+    return () => {
+      window.removeEventListener("hashchange", syncRoute);
+    };
+  }, []);
+
   return (
     <main className="relative min-h-screen overflow-hidden px-4 py-8 sm:px-8">
       <div className="pointer-events-none absolute -left-24 -top-20 h-64 w-64 rounded-full bg-cyan-400/25 blur-3xl" />
@@ -250,103 +273,112 @@ export default function App() {
               {status}
             </Badge>
             <Badge variant="outline">{walletStatus}</Badge>
+            <Button
+              type="button"
+              variant={route === "worker" ? "default" : "outline"}
+              onClick={() => navigate("worker")}
+            >
+              Worker
+            </Button>
+            <Button
+              type="button"
+              variant={route === "payments" ? "default" : "outline"}
+              onClick={() => navigate("payments")}
+            >
+              Payments
+            </Button>
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <Card className="border-border/70 bg-card/90 backdrop-blur">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Wallet className="size-4" />
-                Worker Identity
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Input
-                id="workerId"
-                value={workerId}
-                onChange={(event) => setWorkerId(event.target.value)}
-                className="font-mono text-xs sm:text-sm"
-                placeholder="0x..."
-              />
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={() => void connectWallet()} type="button" variant="default">
-                  Connect Wallet
-                </Button>
-                <Button
-                  onClick={startWorking}
-                  type="button"
-                  variant="secondary"
-                  disabled={!isWalletAddressValid || runningRef.current}
-                >
-                  <Play className="size-4" />
-                  Start
-                </Button>
-                <Button onClick={stopWorking} type="button" variant="outline">
-                  <Square className="size-4" />
-                  Stop
-                </Button>
-                <Button
-                  onClick={() => {
-                    void fetchStats()
-                      .then((stats) => {
-                        log("Stats", stats);
-                      })
-                      .catch((error) => {
-                        log("Stats fetch failed", { error: String(error) });
-                      });
-                  }}
-                  type="button"
-                  variant="ghost"
-                >
-                  <Activity className="size-4" />
-                  Fetch Stats
-                </Button>
-                <Button
-                  onClick={() => {
-                    void fetchPayments()
-                      .then((payments) => {
-                        log("Payments", payments);
-                      })
-                      .catch((error) => {
-                        log("Payments fetch failed", { error: String(error) });
-                      });
-                  }}
-                  type="button"
-                  variant="ghost"
-                >
-                  <Database className="size-4" />
-                  Fetch Payments
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+        {route === "worker" ? (
+          <>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+              <Card className="border-border/70 bg-card/90 backdrop-blur">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Wallet className="size-4" />
+                    Worker Identity
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Input
+                    id="workerId"
+                    value={workerId}
+                    onChange={(event) => setWorkerId(event.target.value)}
+                    className="font-mono text-xs sm:text-sm"
+                    placeholder="0x..."
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={() => void connectWallet()} type="button" variant="default">
+                      Connect Wallet
+                    </Button>
+                    <Button
+                      onClick={startWorking}
+                      type="button"
+                      variant="secondary"
+                      disabled={!isWalletAddressValid || runningRef.current}
+                    >
+                      <Play className="size-4" />
+                      Start
+                    </Button>
+                    <Button onClick={stopWorking} type="button" variant="outline">
+                      <Square className="size-4" />
+                      Stop
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        void fetchStats()
+                          .then((stats) => {
+                            log("Stats", stats);
+                          })
+                          .catch((error) => {
+                            log("Stats fetch failed", { error: String(error) });
+                          });
+                      }}
+                      type="button"
+                      variant="ghost"
+                    >
+                      <Activity className="size-4" />
+                      Fetch Stats
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
 
-          <Card className="border-border/70 bg-card/90 backdrop-blur">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <ClipboardList className="size-4" />
-                Current Assignment
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Textarea
-                className="min-h-56 font-mono text-xs"
-                value={assignmentText || "{}"}
-                readOnly
-              />
-            </CardContent>
-          </Card>
-        </div>
+              <Card className="border-border/70 bg-card/90 backdrop-blur">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <ClipboardList className="size-4" />
+                    Current Assignment
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Textarea
+                    className="min-h-56 font-mono text-xs"
+                    value={assignmentText || "{}"}
+                    readOnly
+                  />
+                </CardContent>
+              </Card>
+            </div>
 
-        <Card className="border-border/70 bg-card/90 backdrop-blur">
-          <CardHeader>
-            <CardTitle className="text-base">Live Log Stream</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Textarea className="min-h-80 font-mono text-xs" value={logText} readOnly />
-          </CardContent>
-        </Card>
+            <Card className="border-border/70 bg-card/90 backdrop-blur">
+              <CardHeader>
+                <CardTitle className="text-base">Live Log Stream</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Textarea className="min-h-80 font-mono text-xs" value={logText} readOnly />
+              </CardContent>
+            </Card>
+          </>
+        ) : (
+          <PaymentsHistoryPage
+            workerId={workerId}
+            walletStatus={walletStatus}
+            onWorkerIdChange={setWorkerId}
+            onConnectWallet={connectWallet}
+          />
+        )}
       </div>
     </main>
   );
