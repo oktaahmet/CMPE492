@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"x402-scheduler/internal/scheduler"
 )
@@ -25,7 +25,7 @@ func NewStore(dsn string) (*Store, error) {
 		return nil, fmt.Errorf("postgres dsn is required")
 	}
 
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -45,10 +45,6 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("postgres store is not initialized")
-	}
-
 	stmts := []string{
 		`
 		CREATE TABLE IF NOT EXISTS workflow_node_state (
@@ -110,9 +106,6 @@ func (s *Store) UpsertWorkflowNodeCompletion(
 	output map[string]any,
 	finalizedAt time.Time,
 ) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("postgres store is not initialized")
-	}
 	workflowID = strings.TrimSpace(workflowID)
 	nodeID = strings.TrimSpace(nodeID)
 	jobID = strings.TrimSpace(jobID)
@@ -158,9 +151,6 @@ func (s *Store) UpsertWorkflowNodeCompletion(
 }
 
 func (s *Store) LoadWorkflowCompletedOutputs(ctx context.Context, workflowID string) (map[string]map[string]any, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("postgres store is not initialized")
-	}
 	workflowID = strings.TrimSpace(workflowID)
 	if workflowID == "" {
 		return map[string]map[string]any{}, nil
@@ -185,7 +175,7 @@ func (s *Store) LoadWorkflowCompletedOutputs(ctx context.Context, workflowID str
 			return nil, err
 		}
 		payload := map[string]any{}
-		if len(raw) > 0 && string(raw) != "null" {
+		if len(raw) > 0 {
 			if err := json.Unmarshal(raw, &payload); err != nil {
 				return nil, err
 			}
@@ -199,10 +189,6 @@ func (s *Store) LoadWorkflowCompletedOutputs(ctx context.Context, workflowID str
 }
 
 func (s *Store) GetActiveWorkflowID(ctx context.Context) (string, error) {
-	if s == nil || s.db == nil {
-		return "", fmt.Errorf("postgres store is not initialized")
-	}
-
 	const q = `SELECT value FROM scheduler_meta WHERE key = $1`
 	var value string
 	if err := s.db.QueryRowContext(ctx, q, activeWorkflowMetaKey).Scan(&value); err != nil {
@@ -215,9 +201,6 @@ func (s *Store) GetActiveWorkflowID(ctx context.Context) (string, error) {
 }
 
 func (s *Store) SetActiveWorkflowID(ctx context.Context, workflowID string) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("postgres store is not initialized")
-	}
 	workflowID = strings.TrimSpace(workflowID)
 	if workflowID == "" {
 		return nil
@@ -234,18 +217,12 @@ func (s *Store) SetActiveWorkflowID(ctx context.Context, workflowID string) erro
 }
 
 func (s *Store) ClearActiveWorkflowID(ctx context.Context) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("postgres store is not initialized")
-	}
 	const q = `DELETE FROM scheduler_meta WHERE key = $1`
 	_, err := s.db.ExecContext(ctx, q, activeWorkflowMetaKey)
 	return err
 }
 
 func (s *Store) DeleteWorkflowState(ctx context.Context, workflowID string) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("postgres store is not initialized")
-	}
 	workflowID = strings.TrimSpace(workflowID)
 	if workflowID == "" {
 		return fmt.Errorf("workflow_id is required")
@@ -261,9 +238,6 @@ func (s *Store) LoadWorkflowNodeOutput(
 	workflowID string,
 	nodeID string,
 ) (map[string]any, bool, error) {
-	if s == nil || s.db == nil {
-		return nil, false, fmt.Errorf("postgres store is not initialized")
-	}
 	workflowID = strings.TrimSpace(workflowID)
 	nodeID = strings.TrimSpace(nodeID)
 	if workflowID == "" || nodeID == "" {
@@ -284,7 +258,7 @@ func (s *Store) LoadWorkflowNodeOutput(
 	}
 
 	payload := map[string]any{}
-	if len(raw) > 0 && string(raw) != "null" {
+	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, false, err
 		}
@@ -293,9 +267,6 @@ func (s *Store) LoadWorkflowNodeOutput(
 }
 
 func (s *Store) UpsertPaymentEvents(ctx context.Context, events []scheduler.PaymentEvent) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("postgres store is not initialized")
-	}
 	if len(events) == 0 {
 		return nil
 	}
@@ -327,22 +298,15 @@ func (s *Store) UpsertPaymentEvents(ctx context.Context, events []scheduler.Paym
 		return err
 	}
 
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
 	for _, event := range events {
 		updatedAt := time.Now().UTC()
 		if ts := strings.TrimSpace(event.UpdatedAt); ts != "" {
-			parsed, parseErr := time.Parse(time.RFC3339, ts)
-			if parseErr == nil {
+			if parsed, parseErr := time.Parse(time.RFC3339, ts); parseErr == nil {
 				updatedAt = parsed
 			}
 		}
 
-		if _, err = tx.ExecContext(
+		if _, err := tx.ExecContext(
 			ctx,
 			q,
 			event.ID,
@@ -359,38 +323,36 @@ func (s *Store) UpsertPaymentEvents(ctx context.Context, events []scheduler.Paym
 			event.Payer,
 			updatedAt,
 		); err != nil {
+			_ = tx.Rollback()
 			return err
 		}
 	}
 
-	err = tx.Commit()
-	return err
+	return tx.Commit()
 }
 
-func (s *Store) ListPaymentEvents(ctx context.Context, workerID string) ([]scheduler.PaymentEvent, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("postgres store is not initialized")
-	}
+const listPaymentEventsSelect = `
+SELECT
+	id, job_id, workflow_id, amount_usdc, worker_id, accepted_hash, status,
+	attempts, COALESCE(last_error, ''), COALESCE(tx_hash, ''), COALESCE(network, ''),
+	COALESCE(payer, ''), updated_at
+FROM payment_events
+`
 
+func (s *Store) ListPaymentEvents(ctx context.Context, workerID string) ([]scheduler.PaymentEvent, error) {
 	workerID = strings.TrimSpace(workerID)
 
-	base := `
-	SELECT
-		id, job_id, workflow_id, amount_usdc, worker_id, accepted_hash, status,
-		attempts, COALESCE(last_error, ''), COALESCE(tx_hash, ''), COALESCE(network, ''),
-		COALESCE(payer, ''), updated_at
-	FROM payment_events
-	`
-	orderBy := " ORDER BY updated_at DESC, created_at DESC"
+	const qAll = listPaymentEventsSelect + `ORDER BY updated_at DESC, created_at DESC`
+	const qByWorker = listPaymentEventsSelect + `WHERE worker_id = $1 ORDER BY updated_at DESC, created_at DESC`
 
 	var (
 		rows *sql.Rows
 		err  error
 	)
 	if workerID == "" {
-		rows, err = s.db.QueryContext(ctx, base+orderBy)
+		rows, err = s.db.QueryContext(ctx, qAll)
 	} else {
-		rows, err = s.db.QueryContext(ctx, base+" WHERE worker_id = $1"+orderBy, workerID)
+		rows, err = s.db.QueryContext(ctx, qByWorker, workerID)
 	}
 	if err != nil {
 		return nil, err
@@ -412,16 +374,7 @@ func (s *Store) ListPaymentEvents(ctx context.Context, workerID string) ([]sched
 }
 
 func (s *Store) ListPendingPaymentEvents(ctx context.Context) ([]scheduler.PaymentEvent, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("postgres store is not initialized")
-	}
-
-	const q = `
-	SELECT
-		id, job_id, workflow_id, amount_usdc, worker_id, accepted_hash, status,
-		attempts, COALESCE(last_error, ''), COALESCE(tx_hash, ''), COALESCE(network, ''),
-		COALESCE(payer, ''), updated_at
-	FROM payment_events
+	const q = listPaymentEventsSelect + `
 	WHERE status = 'pending_x402_transfer' OR status = 'retry'
 	ORDER BY updated_at ASC, created_at ASC
 	`

@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -27,6 +26,7 @@ type Engine struct {
 	jobs               map[string]*jobState
 	queue              []string
 	paymentEvents      []PaymentEvent
+	paymentEventsByID   map[string]int
 	workers            map[string]Worker
 	finalizedJobs      int
 	paymentClient      PaymentProvider
@@ -41,6 +41,7 @@ type jobState struct {
 	submittedPayload map[string]map[string]any
 	acceptedPayload  map[string]any
 	finalized        bool
+	failedRoundWorkers map[string]bool
 }
 
 type Assignment struct {
@@ -98,6 +99,7 @@ func NewEngine(cfg Config) *Engine {
 		cfg:     cfg,
 		jobs:    make(map[string]*jobState),
 		workers: make(map[string]Worker),
+		paymentEventsByID: make(map[string]int),
 	}
 }
 
@@ -148,13 +150,16 @@ func (e *Engine) AssignNext(workerID string) (Assignment, bool) {
 	for i := range e.queue {
 		id := e.queue[i]
 		state := e.jobs[id]
-		if state == nil || state.finalized {
+		if state == nil || jobClosedForAssignment(state) {
 			continue
 		}
 		if _, already := state.assignments[workerID]; already {
 			continue
 		}
 		if _, alreadySubmitted := state.submitted[workerID]; alreadySubmitted {
+			continue
+		}
+		if state.failedRoundWorkers[workerID] {
 			continue
 		}
 		if len(state.assignments)+len(state.submitted) >= e.cfg.ReplicationFactor {
@@ -189,11 +194,14 @@ func (e *Engine) SubmitResult(req ResultSubmission) (Decision, error) {
 	if state == nil {
 		return Decision{}, errors.New("job not found")
 	}
-	if state.finalized {
+	if _, alreadySubmitted := state.submitted[req.WorkerID]; alreadySubmitted {
 		return e.buildDecision(state), nil
 	}
 
 	if _, assigned := state.assignments[req.WorkerID]; !assigned {
+		if state.finalized {
+			return e.buildDecision(state), nil
+		}
 		return Decision{}, errors.New("worker was not assigned for this job")
 	}
 	if err := validateResultPayload(req.ResultPayload, state.job.ResultSchema); err != nil {
@@ -206,22 +214,20 @@ func (e *Engine) SubmitResult(req ResultSubmission) (Decision, error) {
 
 	acceptedSig, acceptedWorkers := majority(state.submitted)
 	if acceptedSig != "" && acceptedWorkers >= quorum(e.cfg.ReplicationFactor) {
-		state.finalized = true
-		e.finalizedJobs++
+		if !state.finalized {
+			state.finalized = true
+			e.finalizedJobs++
+		}
 		acceptedWorkerIDs := workersForSig(state.submitted, acceptedSig)
 		state.acceptedPayload = pickAcceptedPayload(state.submittedPayload, acceptedWorkerIDs)
-		for _, workerID := range acceptedWorkerIDs {
-			e.paymentEvents = append(e.paymentEvents, PaymentEvent{
-				ID:           paymentEventID(state.job.ID, workerID),
-				JobID:        state.job.ID,
-				WorkflowID:   state.job.WorkflowID,
-				AmountUSDC:   state.job.RewardUSDC,
-				WorkerID:     workerID,
-				AcceptedHash: acceptedSig,
-				Status:       "pending_x402_transfer",
-				UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
-			})
-		}
+		e.appendMissingPaymentEventsLocked(state.job, acceptedSig, acceptedWorkerIDs)
+	}
+
+	if !state.finalized && len(state.submitted) >= e.cfg.ReplicationFactor {
+		resetSubmissionRoundLocked(state)
+	}
+
+	if jobClosedForAssignment(state) {
 		e.maybeCompactQueueLocked()
 	}
 
@@ -271,6 +277,7 @@ func (e *Engine) RestorePendingPayments(events []PaymentEvent) {
 		if seen[event.ID] {
 			continue
 		}
+		e.paymentEventsByID[event.ID] = len(e.paymentEvents)
 		e.paymentEvents = append(e.paymentEvents, event)
 		seen[event.ID] = true
 	}
@@ -364,14 +371,11 @@ func (e *Engine) ProcessPayments() int {
 		event PaymentEvent
 	}
 	items := make([]workItem, 0)
-	startedAt := time.Now().UTC().Format(time.RFC3339)
 	for i := range e.paymentEvents {
 		event := &e.paymentEvents[i]
 		if event.Status != "pending_x402_transfer" && event.Status != "retry" {
 			continue
 		}
-		event.Attempts++
-		event.UpdatedAt = startedAt
 		items = append(items, workItem{
 			index: i,
 			id:    event.ID,
@@ -416,6 +420,7 @@ func (e *Engine) ProcessPayments() int {
 		if event.Status != "pending_x402_transfer" && event.Status != "retry" {
 			continue
 		}
+		event.Attempts++
 		event.UpdatedAt = finishedAt
 		if result.err != nil {
 			event.Status = "retry"
@@ -483,7 +488,7 @@ func (e *Engine) onlineWorkersLocked(now time.Time) int {
 func (e *Engine) queuedJobsLocked() int {
 	total := 0
 	for _, id := range e.queue {
-		if st := e.jobs[id]; st != nil && !st.finalized {
+		if st := e.jobs[id]; st != nil && !jobClosedForAssignment(st) {
 			total++
 		}
 	}
@@ -497,7 +502,7 @@ func (e *Engine) maybeCompactQueueLocked() {
 
 	active := 0
 	for _, id := range e.queue {
-		if st := e.jobs[id]; st != nil && !st.finalized {
+		if st := e.jobs[id]; st != nil && !jobClosedForAssignment(st) {
 			active++
 		}
 	}
@@ -507,11 +512,58 @@ func (e *Engine) maybeCompactQueueLocked() {
 
 	out := make([]string, 0, active)
 	for _, id := range e.queue {
-		if st := e.jobs[id]; st != nil && !st.finalized {
+		if st := e.jobs[id]; st != nil && !jobClosedForAssignment(st) {
 			out = append(out, id)
 		}
 	}
 	e.queue = out
+}
+
+func jobClosedForAssignment(state *jobState) bool {
+	if state == nil {
+		return true
+	}
+	return state.finalized
+}
+
+func resetSubmissionRoundLocked(state *jobState) {
+
+	if state.failedRoundWorkers == nil {
+        state.failedRoundWorkers = make(map[string]bool)
+    }
+    for workerID := range state.submitted {
+        state.failedRoundWorkers[workerID] = true
+    }
+
+	state.assignments = map[string]time.Time{}
+	state.submitted = map[string]string{}
+	state.submittedPayload = map[string]map[string]any{}
+}
+
+func (e *Engine) appendMissingPaymentEventsLocked(job Job, acceptedSig string, workerIDs []string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, workerID := range workerIDs {
+		id := paymentEventID(job.ID, workerID)
+		if e.hasPaymentEventLocked(id) {
+			continue
+		}
+		e.paymentEventsByID[id] = len(e.paymentEvents)
+		e.paymentEvents = append(e.paymentEvents, PaymentEvent{
+			ID:           id,
+			JobID:        job.ID,
+			WorkflowID:   job.WorkflowID,
+			AmountUSDC:   job.RewardUSDC,
+			WorkerID:     workerID,
+			AcceptedHash: acceptedSig,
+			Status:       "pending_x402_transfer",
+			UpdatedAt:    now,
+		})
+	}
+}
+
+func (e *Engine) hasPaymentEventLocked(id string) bool {
+	idx, exists := e.paymentEventsByID[id]
+	return exists && idx >= 0 && idx < len(e.paymentEvents)
 }
 
 func majority(m map[string]string) (string, int) {
@@ -575,23 +627,25 @@ func cloneJSONMap(in map[string]any) map[string]any {
 	if in == nil {
 		return nil
 	}
-	raw, err := json.Marshal(in)
-	if err != nil {
-		out := make(map[string]any, len(in))
-		for k, v := range in {
-			out[k] = v
-		}
-		return out
-	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		fallback := make(map[string]any, len(in))
-		for k, v := range in {
-			fallback[k] = v
-		}
-		return fallback
-	}
-	return out
+	out := make(map[string]any, len(in))
+    for k, v := range in {
+        out[k] = cloneValue(v)
+    }
+    return out
+}
+func cloneValue(v any) any {
+    switch val := v.(type) {
+    case map[string]any:
+        return cloneJSONMap(val)
+    case []any:
+        out := make([]any, len(val))
+        for i, item := range val {
+            out[i] = cloneValue(item)
+        }
+        return out
+    default:
+        return val
+    }
 }
 
 func validateResultPayload(payload map[string]any, schema map[string]PayloadFieldRule) error {

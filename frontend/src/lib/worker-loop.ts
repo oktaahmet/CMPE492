@@ -17,6 +17,8 @@ export type WasmWorkerResponse = {
   error?: string;
 };
 
+const WASM_WORKER_TIMEOUT_MS = 45_000;
+
 type RunOnceDeps = {
   workerID: string;
   ensureWasmWorker: () => Worker;
@@ -108,7 +110,10 @@ function executeWasmJob(
   return new Promise<WasmWorkerResponse>((resolve, reject) => {
     const worker = ensureWasmWorker();
     const requestID = `${assignment.job_id}-${Date.now()}`;
-    const timeoutID = window.setTimeout(() => reject(new Error("wasm worker timeout")), 15000);
+    const timeoutID = window.setTimeout(
+      () => reject(new Error("wasm worker timeout")),
+      WASM_WORKER_TIMEOUT_MS,
+    );
 
     const onMessage = (event: MessageEvent<WasmWorkerResponse>) => {
       const data = event.data;

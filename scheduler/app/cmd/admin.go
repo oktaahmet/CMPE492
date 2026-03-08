@@ -305,19 +305,38 @@ func activateWorkflow(
 		return adminWorkflowActivateResponse{}, err
 	}
 
-	current := workflowManager.WorkflowIDs()
-	for _, id := range current {
-		workflowManager.DeleteWorkflow(id)
-		engine.RemoveWorkflowJobs(id)
+	spec, completedOutputs, err := prepareWorkflowLoad(ctx, path, store)
+	if err != nil {
+		return adminWorkflowActivateResponse{}, err
 	}
 	if resetState {
-		if err := store.DeleteWorkflowState(ctx, workflowID); err != nil {
+		completedOutputs = nil
+	}
+
+	// Preflight the workflow load before touching the currently active workflow.
+	probeManager := scheduler.NewWorkflowManager()
+	if _, _, err := probeManager.LoadWorkflowWithCompleted(spec, completedOutputs); err != nil {
+		return adminWorkflowActivateResponse{}, err
+	}
+
+	current := workflowManager.WorkflowIDs()
+	if resetState {
+		if err := store.DeleteWorkflowState(ctx, spec.ID); err != nil {
 			return adminWorkflowActivateResponse{}, fmt.Errorf("failed to reset workflow state: %w", err)
 		}
 	}
 
-	spec, result, recovered, err := loadWorkflowFromPath(ctx, path, engine, workflowManager, store)
+	for _, id := range current {
+		workflowManager.DeleteWorkflow(id)
+		engine.RemoveWorkflowJobs(id)
+	}
+
+	result, jobs, err := workflowManager.LoadWorkflowWithCompleted(spec, completedOutputs)
 	if err != nil {
+		return adminWorkflowActivateResponse{}, err
+	}
+	if err := enqueueWorkflowJobs(engine, jobs); err != nil {
+		workflowManager.DeleteWorkflow(result.WorkflowID)
 		return adminWorkflowActivateResponse{}, err
 	}
 	if err := store.SetActiveWorkflowID(ctx, spec.ID); err != nil {
@@ -327,7 +346,7 @@ func activateWorkflow(
 	return adminWorkflowActivateResponse{
 		WorkflowID:      spec.ID,
 		ResetState:      resetState,
-		RecoveredNodes:  recovered,
+		RecoveredNodes:  len(completedOutputs),
 		EnqueuedJobs:    len(result.EnqueuedJobIDs),
 		TopologicalSize: len(result.TopologicalOrder),
 	}, nil
@@ -387,24 +406,12 @@ func loadWorkflowFromPath(
 	workflowManager *scheduler.WorkflowManager,
 	store *postgres.Store,
 ) (scheduler.WorkflowSpec, scheduler.WorkflowLoadResult, int, error) {
-	spec, err := readWorkflowSpecFromPath(path)
+	normalized, completedOutputs, err := prepareWorkflowLoad(ctx, path, store)
 	if err != nil {
-		return scheduler.WorkflowSpec{}, scheduler.WorkflowLoadResult{}, 0, err
-	}
-	normalized, err := scheduler.ValidateWorkflowSpec(spec)
-	if err != nil {
-		return scheduler.WorkflowSpec{}, scheduler.WorkflowLoadResult{}, 0, err
-	}
-	if err := ensureWorkflowWasmArtifacts(normalized, path); err != nil {
 		return scheduler.WorkflowSpec{}, scheduler.WorkflowLoadResult{}, 0, err
 	}
 	if workflowManager.HasWorkflow(normalized.ID) {
 		return normalized, scheduler.WorkflowLoadResult{}, 0, fmt.Errorf("workflow already loaded: %s", normalized.ID)
-	}
-
-	completedOutputs, err := store.LoadWorkflowCompletedOutputs(ctx, normalized.ID)
-	if err != nil {
-		return scheduler.WorkflowSpec{}, scheduler.WorkflowLoadResult{}, 0, err
 	}
 
 	result, jobs, err := workflowManager.LoadWorkflowWithCompleted(normalized, completedOutputs)
@@ -417,6 +424,30 @@ func loadWorkflowFromPath(
 	}
 
 	return normalized, result, len(completedOutputs), nil
+}
+
+func prepareWorkflowLoad(
+	ctx context.Context,
+	path string,
+	store *postgres.Store,
+) (scheduler.WorkflowSpec, map[string]map[string]any, error) {
+	spec, err := readWorkflowSpecFromPath(path)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, nil, err
+	}
+	normalized, err := scheduler.ValidateWorkflowSpec(spec)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, nil, err
+	}
+	if err := ensureWorkflowWasmArtifacts(normalized, path); err != nil {
+		return scheduler.WorkflowSpec{}, nil, err
+	}
+
+	completedOutputs, err := store.LoadWorkflowCompletedOutputs(ctx, normalized.ID)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, nil, err
+	}
+	return normalized, completedOutputs, nil
 }
 
 func readWorkflowSpecFromPath(path string) (scheduler.WorkflowSpec, error) {

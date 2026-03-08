@@ -73,6 +73,8 @@ func main() {
 		log.Fatalf("failed to load pending payments: %v", err)
 	}
 	engine.RestorePendingPayments(pendingPayments)
+	stopPaymentsProcessor := startPaymentsProcessor(engine, store, loadPaymentsProcessInterval())
+	defer stopPaymentsProcessor()
 
 	if err := bootstrapWorkflow(engine, workflowManager, store); err != nil {
 		log.Fatal(err)
@@ -236,25 +238,29 @@ func resultHandler(
 					output,
 					time.Now().UTC(),
 				); err != nil {
-					log.Printf("persist workflow node state failed: workflow_id=%s node_id=%s err=%v", workflowID, nodeID, err)
+					http.Error(w, "failed to persist finalized workflow node state", http.StatusInternalServerError)
+					return
 				}
 			} else {
-				log.Printf("job identity not found during persistence: job_id=%s", req.JobID)
+				http.Error(w, "job identity not found for finalized result", http.StatusInternalServerError)
+				return
 			}
 			if err := store.UpsertPaymentEvents(r.Context(), engine.PaymentQueueSnapshot()); err != nil {
-				log.Printf("persist pending payments failed: job_id=%s err=%v", req.JobID, err)
+				http.Error(w, "failed to persist payment queue", http.StatusInternalServerError)
+				return
 			}
 
 			nextJobs, err := workflowManager.OnJobFinalized(req.JobID, output)
 			if err != nil {
-				log.Printf("workflow progression failed for %s: %v", req.JobID, err)
+				http.Error(w, "failed to progress workflow", http.StatusInternalServerError)
+				return
 			} else {
-				for _, job := range nextJobs {
-					if err := engine.Enqueue(job); err != nil {
-						log.Printf("enqueue unlocked workflow node failed: job=%s err=%v", job.ID, err)
-					}
+				if err := enqueueWorkflowJobs(engine, nextJobs); err != nil {
+					http.Error(w, "failed to enqueue unlocked workflow jobs", http.StatusInternalServerError)
+					return
 				}
 			}
+			triggerPaymentProcessingAsync(engine, store)
 		}
 		writeJSON(w, decision, http.StatusOK)
 	}
@@ -481,14 +487,85 @@ func processPaymentsHandler(engine *scheduler.Engine, store *postgres.Store) htt
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		processedCount := engine.ProcessPayments()
-		if err := store.UpsertPaymentEvents(r.Context(), engine.PaymentQueueSnapshot()); err != nil {
+		processedCount, err := runPaymentSweep(r.Context(), engine, store)
+		if err != nil {
 			log.Printf("persist payments failed: err=%v", err)
 		}
 		writeJSON(w, ProcessPaymentsResponse{
 			ProcessedCount: processedCount,
 		}, http.StatusOK)
 	}
+}
+
+func triggerPaymentProcessingAsync(engine *scheduler.Engine, store *postgres.Store) {
+	go func() {
+		totalProcessed := 0
+		for {
+			processedCount, err := runPaymentSweep(context.Background(), engine, store)
+			if err != nil {
+				log.Printf("async payment sweep failed: %v", err)
+				return
+			}
+			totalProcessed += processedCount
+
+			if pendingPaymentCount(engine.PaymentQueueSnapshot()) == 0 {
+				if totalProcessed > 0 {
+					log.Printf("async payment sweep processed=%d", totalProcessed)
+				}
+				return
+			}
+
+			time.Sleep(2 * time.Second)
+		}
+	}()
+}
+
+func startPaymentsProcessor(engine *scheduler.Engine, store *postgres.Store, interval time.Duration) func() {
+	if interval <= 0 {
+		return func() {}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				processedCount, err := runPaymentSweep(ctx, engine, store)
+				if err != nil {
+					log.Printf("background payment sweep failed: %v", err)
+					continue
+				}
+				if processedCount > 0 {
+					log.Printf("background payment sweep processed=%d", processedCount)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return cancel
+}
+
+func runPaymentSweep(ctx context.Context, engine *scheduler.Engine, store *postgres.Store) (int, error) {
+	processedCount := engine.ProcessPayments()
+	if err := store.UpsertPaymentEvents(ctx, engine.PaymentQueueSnapshot()); err != nil {
+		return processedCount, err
+	}
+	return processedCount, nil
+}
+
+func pendingPaymentCount(events []scheduler.PaymentEvent) int {
+	count := 0
+	for _, event := range events {
+		if event.Status == "pending_x402_transfer" || event.Status == "retry" {
+			count++
+		}
+	}
+	return count
 }
 
 // statsHandler godoc

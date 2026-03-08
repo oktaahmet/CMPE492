@@ -67,6 +67,12 @@
         color: var(--muted);
         font-size: 13px;
       }
+      .file-list {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+        font-size: 13px;
+      }
       pre {
         margin: 0;
         background: #0f172a;
@@ -109,6 +115,10 @@
             <input id="cppFilesInput" type="file" accept=".cpp" multiple />
           </div>
           <div class="row">
+            <p class="muted" id="cppFilesHint">No C++ file selected.</p>
+          </div>
+          <ul id="cppFilesList" class="file-list"></ul>
+          <div class="row">
             <button id="uploadBtn" type="button">Upload</button>
           </div>
         </div>
@@ -144,6 +154,8 @@
       const workflowSelect = document.getElementById("workflowSelect");
       const workflowJsonInput = document.getElementById("workflowJsonInput");
       const cppFilesInput = document.getElementById("cppFilesInput");
+      const cppFilesHint = document.getElementById("cppFilesHint");
+      const cppFilesList = document.getElementById("cppFilesList");
       const uploadBtn = document.getElementById("uploadBtn");
       const activateBtn = document.getElementById("activateBtn");
       const deleteBtn = document.getElementById("deleteBtn");
@@ -153,6 +165,26 @@
       const statusLine = document.getElementById("statusLine");
 
       let adminToken = "";
+      const selectedCppFiles = new Map();
+
+      function cppFileKey(file) {
+        return `${file.name}::${file.size}::${file.lastModified}`;
+      }
+
+      function renderSelectedCppFiles() {
+        const files = Array.from(selectedCppFiles.values());
+        cppFilesList.innerHTML = "";
+        if (files.length === 0) {
+          cppFilesHint.textContent = "No C++ file selected.";
+          return;
+        }
+        cppFilesHint.textContent = `${files.length} C++ file(s) selected.`;
+        for (const file of files) {
+          const item = document.createElement("li");
+          item.textContent = file.name;
+          cppFilesList.appendChild(item);
+        }
+      }
 
       function show(value) {
         output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -241,7 +273,7 @@
           show("workflow_json file is required.");
           return;
         }
-        const cppFiles = cppFilesInput.files;
+        const cppFiles = Array.from(selectedCppFiles.values());
         if (!cppFiles || cppFiles.length === 0) {
           show("At least one .cpp file is required.");
           return;
@@ -259,6 +291,8 @@
             body: form,
           });
           show(data);
+          selectedCppFiles.clear();
+          renderSelectedCppFiles();
           await refreshWorkflows();
         } catch (err) {
           show(String(err));
@@ -322,6 +356,13 @@
       unlockBtn.addEventListener("click", () => {
         void unlock();
       });
+      cppFilesInput.addEventListener("change", () => {
+        for (const file of cppFilesInput.files) {
+          selectedCppFiles.set(cppFileKey(file), file);
+        }
+        cppFilesInput.value = "";
+        renderSelectedCppFiles();
+      });
       uploadBtn.addEventListener("click", () => {
         void uploadWorkflow();
       });
@@ -334,6 +375,8 @@
       refreshBtn.addEventListener("click", () => {
         void refreshWorkflows().catch((err) => show(String(err)));
       });
+
+      renderSelectedCppFiles();
     </script>
   </body>
 </html>

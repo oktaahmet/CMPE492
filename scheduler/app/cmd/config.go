@@ -53,15 +53,17 @@ func loadPaymentProvider() scheduler.PaymentProvider {
 }
 
 func loadReplicationFactor() int {
+	const defaultReplicationFactor = 3
+
 	raw := strings.TrimSpace(os.Getenv("REPLICATION_FACTOR"))
 	if raw == "" {
-		log.Println("replication factor: 1 (default)")
-		return 1
+		log.Printf("replication factor: %d (default)", defaultReplicationFactor)
+		return defaultReplicationFactor
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
-		log.Printf("invalid REPLICATION_FACTOR=%q, using 1", raw)
-		return 1
+		log.Printf("invalid REPLICATION_FACTOR=%q, using %d", raw, defaultReplicationFactor)
+		return defaultReplicationFactor
 	}
 	log.Printf("replication factor: %d", n)
 	return n
@@ -134,4 +136,28 @@ func loadMaxResultPayloadBytes() int64 {
 
 	log.Printf("max result payload bytes: %d", n)
 	return n
+}
+
+func loadPaymentsProcessInterval() time.Duration {
+	const defaultInterval = 5 * time.Second
+
+	raw := strings.TrimSpace(os.Getenv("PAYMENTS_PROCESS_INTERVAL_SECONDS"))
+	if raw == "" {
+		log.Printf("payments process interval: %s (default)", defaultInterval)
+		return defaultInterval
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		log.Printf("invalid PAYMENTS_PROCESS_INTERVAL_SECONDS=%q, using %s", raw, defaultInterval)
+		return defaultInterval
+	}
+	if n == 0 {
+		log.Printf("payments processor disabled (PAYMENTS_PROCESS_INTERVAL_SECONDS=0)")
+		return 0
+	}
+
+	interval := time.Duration(n) * time.Second
+	log.Printf("payments process interval: %s", interval)
+	return interval
 }
