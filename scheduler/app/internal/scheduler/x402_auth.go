@@ -1,3 +1,5 @@
+//go:build !unit
+
 // Creates and signs jwt for faciliator verify/settle api calls.
 // Parallels: https://github.com/coinbase/cdp-sdk/blob/8794662b60e721852bfb60801a1d0bb1bb6e4c59/go/auth/jwt.go
 

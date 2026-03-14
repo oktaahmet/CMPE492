@@ -16,6 +16,7 @@ type WorkflowSpec struct {
 type WorkflowNode struct {
 	ID           string                      `json:"id"`
 	DependsOn    []string                    `json:"depends_on,omitempty"`
+	Priority     int                         `json:"priority,omitempty"`
 	WasmURL      string                      `json:"wasm_url"`
 	Args         []any                       `json:"args,omitempty"`
 	ResultSchema map[string]PayloadFieldRule `json:"result_schema,omitempty"`
@@ -28,6 +29,13 @@ type WorkflowLoadResult struct {
 	EnqueuedNodes    []string `json:"enqueued_nodes"`
 	EnqueuedJobIDs   []string `json:"enqueued_job_ids"`
 }
+
+type TopologyMode string
+
+const (
+	TopologyModePlain         TopologyMode = "plain"
+	TopologyModePriorityAware TopologyMode = "priority_aware"
+)
 
 type workflowRuntime struct {
 	spec             WorkflowSpec
@@ -45,19 +53,67 @@ type jobRef struct {
 
 type WorkflowManager struct {
 	mu        sync.Mutex
+	mode      TopologyMode
 	workflows map[string]*workflowRuntime
 	jobToNode map[string]jobRef
 }
 
+type WorkflowNodeSnapshot struct {
+	ID         string   `json:"id"`
+	DependsOn  []string `json:"depends_on,omitempty"`
+	Priority   int      `json:"priority,omitempty"`
+	WasmURL    string   `json:"wasm_url"`
+	RewardUSDC string   `json:"reward_usdc"`
+	Completed  bool     `json:"completed"`
+	Enqueued   bool     `json:"enqueued"`
+}
+
+type WorkflowRuntimeSnapshot struct {
+	WorkflowID       string                 `json:"workflow_id"`
+	TopologicalOrder []string               `json:"topological_order"`
+	Nodes            []WorkflowNodeSnapshot `json:"nodes"`
+}
+
 func NewWorkflowManager() *WorkflowManager {
 	return &WorkflowManager{
+		mode:      TopologyModePlain,
 		workflows: make(map[string]*workflowRuntime),
 		jobToNode: make(map[string]jobRef),
 	}
 }
 
+func NormalizeTopologyMode(raw string) TopologyMode {
+	switch TopologyMode(strings.TrimSpace(raw)) {
+	case TopologyModePriorityAware:
+		return TopologyModePriorityAware
+	default:
+		return TopologyModePlain
+	}
+}
+
+func IsValidTopologyMode(raw string) bool {
+	switch TopologyMode(strings.TrimSpace(raw)) {
+	case TopologyModePlain, TopologyModePriorityAware:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *WorkflowManager) SetTopologyMode(mode TopologyMode) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mode = NormalizeTopologyMode(string(mode))
+}
+
+func (m *WorkflowManager) TopologyMode() TopologyMode {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mode
+}
+
 func ValidateWorkflowSpec(spec WorkflowSpec) (WorkflowSpec, error) {
-	normalized, _, _, err := normalizeAndValidateWorkflow(spec)
+	normalized, _, _, err := normalizeAndValidateWorkflow(spec, TopologyModePlain)
 	if err != nil {
 		return WorkflowSpec{}, err
 	}
@@ -69,13 +125,13 @@ func (m *WorkflowManager) LoadWorkflow(spec WorkflowSpec) (WorkflowLoadResult, [
 }
 
 func (m *WorkflowManager) LoadWorkflowWithCompleted(spec WorkflowSpec, completed map[string]map[string]any) (WorkflowLoadResult, []Job, error) {
-	normalized, nodesByID, topo, err := normalizeAndValidateWorkflow(spec)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	normalized, nodesByID, topo, err := normalizeAndValidateWorkflow(spec, m.mode)
 	if err != nil {
 		return WorkflowLoadResult{}, nil, err
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if _, exists := m.workflows[normalized.ID]; exists {
 		return WorkflowLoadResult{}, nil, fmt.Errorf("workflow already exists: %s", normalized.ID)
@@ -143,6 +199,36 @@ func (m *WorkflowManager) WorkflowIDs() []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func (m *WorkflowManager) Snapshot(workflowID string) (WorkflowRuntimeSnapshot, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	runtime := m.workflows[workflowID]
+	if runtime == nil {
+		return WorkflowRuntimeSnapshot{}, false
+	}
+
+	nodes := make([]WorkflowNodeSnapshot, 0, len(runtime.topo))
+	for _, nodeID := range runtime.topo {
+		node := runtime.nodesByID[nodeID]
+		nodes = append(nodes, WorkflowNodeSnapshot{
+			ID:         node.ID,
+			DependsOn:  append([]string(nil), node.DependsOn...),
+			Priority:   node.Priority,
+			WasmURL:    node.WasmURL,
+			RewardUSDC: node.RewardUSDC,
+			Completed:  runtime.completed[nodeID],
+			Enqueued:   runtime.enqueued[nodeID],
+		})
+	}
+
+	return WorkflowRuntimeSnapshot{
+		WorkflowID:       runtime.spec.ID,
+		TopologicalOrder: append([]string(nil), runtime.topo...),
+		Nodes:            nodes,
+	}, true
 }
 
 func (m *WorkflowManager) OnJobFinalized(jobID string, output map[string]any) ([]Job, error) {
@@ -279,7 +365,7 @@ func jobID(workflowID, nodeID string) string {
 	return fmt.Sprintf("%s:%s", workflowID, nodeID)
 }
 
-func normalizeAndValidateWorkflow(spec WorkflowSpec) (WorkflowSpec, map[string]WorkflowNode, []string, error) {
+func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (WorkflowSpec, map[string]WorkflowNode, []string, error) {
 	spec.ID = strings.TrimSpace(spec.ID)
 	if spec.ID == "" {
 		return WorkflowSpec{}, nil, nil, errors.New("workflow id is required")
@@ -344,7 +430,7 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec) (WorkflowSpec, map[string]W
 		}
 	}
 
-	topo, err := topologicalSort(nodesByID)
+	topo, err := topologicalSort(nodesByID, mode)
 	if err != nil {
 		return WorkflowSpec{}, nil, nil, err
 	}
@@ -355,7 +441,7 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec) (WorkflowSpec, map[string]W
 	}, nodesByID, topo, nil
 }
 
-func topologicalSort(nodesByID map[string]WorkflowNode) ([]string, error) {
+func topologicalSort(nodesByID map[string]WorkflowNode, mode TopologyMode) ([]string, error) {
 	inDegree := make(map[string]int, len(nodesByID))
 	edges := make(map[string][]string, len(nodesByID))
 
@@ -381,7 +467,7 @@ func topologicalSort(nodesByID map[string]WorkflowNode) ([]string, error) {
 			ready = append(ready, id)
 		}
 	}
-	sort.Strings(ready)
+	sortReadyNodeIDs(ready, nodesByID, mode)
 
 	out := make([]string, 0, len(nodesByID))
 	for len(ready) > 0 {
@@ -395,13 +481,27 @@ func topologicalSort(nodesByID map[string]WorkflowNode) ([]string, error) {
 				ready = append(ready, child)
 			}
 		}
-		sort.Strings(ready)
+		sortReadyNodeIDs(ready, nodesByID, mode)
 	}
 
 	if len(out) != len(nodesByID) {
 		return nil, errors.New("workflow graph contains cycle")
 	}
 	return out, nil
+}
+
+func sortReadyNodeIDs(ids []string, nodesByID map[string]WorkflowNode, mode TopologyMode) {
+	sort.Slice(ids, func(i, j int) bool {
+		if NormalizeTopologyMode(string(mode)) != TopologyModePriorityAware {
+			return ids[i] < ids[j]
+		}
+		left := nodesByID[ids[i]]
+		right := nodesByID[ids[j]]
+		if left.Priority == right.Priority {
+			return ids[i] < ids[j]
+		}
+		return left.Priority > right.Priority
+	})
 }
 
 func validateNodeResultSchema(nodeID string, schema map[string]PayloadFieldRule) error {

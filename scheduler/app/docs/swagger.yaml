@@ -36,6 +36,8 @@ definitions:
     properties:
       reset_state:
         type: boolean
+      topology_mode:
+        type: string
       workflow_id:
         type: string
     type: object
@@ -49,6 +51,8 @@ definitions:
         type: boolean
       topological_size:
         type: integer
+      topology_mode:
+        type: string
       workflow_id:
         type: string
     type: object
@@ -69,6 +73,8 @@ definitions:
       active_workflow_id:
         type: string
       loaded_workflow_id:
+        type: string
+      topology_mode:
         type: string
       uploaded_ids:
         items:

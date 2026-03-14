@@ -17,7 +17,10 @@ type Store struct {
 	db *sql.DB
 }
 
-const activeWorkflowMetaKey = "active_workflow_id"
+const (
+	activeWorkflowMetaKey = "active_workflow_id"
+	topologyModeMetaKey   = "topology_mode"
+)
 
 func NewStore(dsn string) (*Store, error) {
 	dsn = strings.TrimSpace(dsn)
@@ -189,15 +192,7 @@ func (s *Store) LoadWorkflowCompletedOutputs(ctx context.Context, workflowID str
 }
 
 func (s *Store) GetActiveWorkflowID(ctx context.Context) (string, error) {
-	const q = `SELECT value FROM scheduler_meta WHERE key = $1`
-	var value string
-	if err := s.db.QueryRowContext(ctx, q, activeWorkflowMetaKey).Scan(&value); err != nil {
-		if err == sql.ErrNoRows {
-			return "", nil
-		}
-		return "", err
-	}
-	return strings.TrimSpace(value), nil
+	return s.getMetaValue(ctx, activeWorkflowMetaKey)
 }
 
 func (s *Store) SetActiveWorkflowID(ctx context.Context, workflowID string) error {
@@ -205,21 +200,23 @@ func (s *Store) SetActiveWorkflowID(ctx context.Context, workflowID string) erro
 	if workflowID == "" {
 		return nil
 	}
-
-	const q = `
-	INSERT INTO scheduler_meta (key, value, updated_at)
-	VALUES ($1, $2, NOW())
-	ON CONFLICT (key) DO UPDATE
-	SET value = EXCLUDED.value, updated_at = NOW()
-	`
-	_, err := s.db.ExecContext(ctx, q, activeWorkflowMetaKey, workflowID)
-	return err
+	return s.setMetaValue(ctx, activeWorkflowMetaKey, workflowID)
 }
 
 func (s *Store) ClearActiveWorkflowID(ctx context.Context) error {
-	const q = `DELETE FROM scheduler_meta WHERE key = $1`
-	_, err := s.db.ExecContext(ctx, q, activeWorkflowMetaKey)
-	return err
+	return s.clearMetaValue(ctx, activeWorkflowMetaKey)
+}
+
+func (s *Store) GetTopologyMode(ctx context.Context) (string, error) {
+	return s.getMetaValue(ctx, topologyModeMetaKey)
+}
+
+func (s *Store) SetTopologyMode(ctx context.Context, mode string) error {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return nil
+	}
+	return s.setMetaValue(ctx, topologyModeMetaKey, mode)
 }
 
 func (s *Store) DeleteWorkflowState(ctx context.Context, workflowID string) error {
@@ -424,4 +421,33 @@ func scanPaymentEvent(scanner interface {
 	}
 	event.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 	return event, nil
+}
+
+func (s *Store) getMetaValue(ctx context.Context, key string) (string, error) {
+	const q = `SELECT value FROM scheduler_meta WHERE key = $1`
+	var value string
+	if err := s.db.QueryRowContext(ctx, q, key).Scan(&value); err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(value), nil
+}
+
+func (s *Store) setMetaValue(ctx context.Context, key string, value string) error {
+	const q = `
+	INSERT INTO scheduler_meta (key, value, updated_at)
+	VALUES ($1, $2, NOW())
+	ON CONFLICT (key) DO UPDATE
+	SET value = EXCLUDED.value, updated_at = NOW()
+	`
+	_, err := s.db.ExecContext(ctx, q, key, value)
+	return err
+}
+
+func (s *Store) clearMetaValue(ctx context.Context, key string) error {
+	const q = `DELETE FROM scheduler_meta WHERE key = $1`
+	_, err := s.db.ExecContext(ctx, q, key)
+	return err
 }

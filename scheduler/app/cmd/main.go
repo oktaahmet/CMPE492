@@ -75,6 +75,8 @@ func main() {
 	engine.RestorePendingPayments(pendingPayments)
 	stopPaymentsProcessor := startPaymentsProcessor(engine, store, loadPaymentsProcessInterval())
 	defer stopPaymentsProcessor()
+	stopAssignmentJanitor := startAssignmentJanitor(engine, 5*time.Second)
+	defer stopAssignmentJanitor()
 
 	if err := bootstrapWorkflow(engine, workflowManager, store); err != nil {
 		log.Fatal(err)
@@ -88,6 +90,7 @@ func main() {
 	http.HandleFunc("/api/payments", paymentsHandler(store))
 	http.HandleFunc("/api/payments/process", processPaymentsHandler(engine, store))
 	http.HandleFunc("/api/stats", statsHandler(engine))
+	http.HandleFunc("/api/runtime", adminRuntimeHandler(engine, workflowManager, store))
 	adminToken := loadAdminAPIToken()
 	if adminToken != "" {
 		http.HandleFunc(
@@ -105,6 +108,10 @@ func main() {
 		http.HandleFunc(
 			"/api/admin/workflows/delete",
 			withAdminToken(adminToken, adminWorkflowDeleteHandler(engine, workflowManager, store)),
+		)
+		http.HandleFunc(
+			"/api/admin/runtime",
+			withAdminToken(adminToken, adminRuntimeHandler(engine, workflowManager, store)),
 		)
 	} else {
 		log.Println("ADMIN_API_TOKEN not set: admin endpoints disabled")
@@ -550,6 +557,29 @@ func startPaymentsProcessor(engine *scheduler.Engine, store *postgres.Store, int
 	return cancel
 }
 
+func startAssignmentJanitor(engine *scheduler.Engine, interval time.Duration) func() {
+	if interval <= 0 {
+		return func() {}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				engine.CleanupExpiredAssignments()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return cancel
+}
+
 func runPaymentSweep(ctx context.Context, engine *scheduler.Engine, store *postgres.Store) (int, error) {
 	processedCount := engine.ProcessPayments()
 	if err := store.UpsertPaymentEvents(ctx, engine.PaymentQueueSnapshot()); err != nil {
@@ -600,6 +630,12 @@ func bootstrapWorkflow(
 	if bootPath == "" {
 		bootPath = filepath.Join("workflows", "prime-example", "prime-example.json")
 	}
+	topologyMode, err := store.GetTopologyMode(context.Background())
+	if err != nil {
+		log.Printf("failed to read topology mode from db: %v", err)
+		topologyMode = ""
+	}
+	workflowManager.SetTopologyMode(scheduler.NormalizeTopologyMode(topologyMode))
 	activeID, err := store.GetActiveWorkflowID(context.Background())
 	if err != nil {
 		log.Printf("failed to read active workflow id from db: %v", err)
@@ -621,10 +657,14 @@ func bootstrapWorkflow(
 	if err := store.SetActiveWorkflowID(context.Background(), spec.ID); err != nil {
 		log.Printf("failed to persist active workflow id during bootstrap: %v", err)
 	}
+	if err := store.SetTopologyMode(context.Background(), string(workflowManager.TopologyMode())); err != nil {
+		log.Printf("failed to persist topology mode during bootstrap: %v", err)
+	}
 	log.Printf(
-		"workflow bootstrapped: file=%s workflow_id=%s topo_nodes=%d recovered_completed=%d initial_jobs=%d",
+		"workflow bootstrapped: file=%s workflow_id=%s topology_mode=%s topo_nodes=%d recovered_completed=%d initial_jobs=%d",
 		bootPath,
 		spec.ID,
+		workflowManager.TopologyMode(),
 		len(result.TopologicalOrder),
 		recovered,
 		len(result.EnqueuedJobIDs),

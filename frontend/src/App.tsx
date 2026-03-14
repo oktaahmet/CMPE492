@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, Play, Square, Wallet, Waves, ClipboardList } from "lucide-react";
+import { Activity, Play, Square, Wallet, Waves, ClipboardList, Network } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { fetchStats, registerWorker } from "./lib/api";
+import { LiveRuntimePage } from "./components/live-runtime-page";
 import { PaymentsHistoryPage } from "./components/payments-history-page";
 import { runWorkerOnce } from "./lib/worker-loop";
 
@@ -49,9 +50,11 @@ function safeStringify(value: unknown): string {
 }
 
 export default function App() {
-  const [route, setRoute] = useState<"worker" | "payments">(
-    window.location.hash === "#/payments" ? "payments" : "worker",
-  );
+  const [route, setRoute] = useState<"worker" | "payments" | "runtime">(() => {
+    if (window.location.hash === "#/payments") return "payments";
+    if (window.location.hash === "#/runtime") return "runtime";
+    return "worker";
+  });
   const [assignmentText, setAssignmentText] = useState("");
   const [logText, setLogText] = useState("");
   const [workerId, setWorkerId] = useState("");
@@ -59,17 +62,19 @@ export default function App() {
   const [walletStatus, setWalletStatus] = useState("wallet: disconnected");
 
   const wasmWorkerRef = useRef<Worker | null>(null);
+  const workerIdRef = useRef("");
   const runningRef = useRef(false);
   const loopTimerRef = useRef<number | undefined>(undefined);
   const heartbeatTimerRef = useRef<number | undefined>(undefined);
   const discoveredProviderRef = useRef<EIP1193Provider | null>(null);
+  const autoWorkerStartedRef = useRef(false);
 
   const log = useCallback((message: string, obj?: unknown) => {
     const line = obj === undefined ? message : `${message} ${safeStringify(obj)}`;
     setLogText((prev) => `${new Date().toISOString()}  ${line}\n${prev}`);
   }, []);
 
-  const walletAddress = () => workerId.trim();
+  const walletAddress = () => workerIdRef.current.trim();
   const isWalletAddressValid = walletAddress().startsWith("0x") && walletAddress().length >= 42;
 
   const statusBadgeVariant = () => {
@@ -85,9 +90,13 @@ export default function App() {
     }
   };
 
-  const navigate = (next: "worker" | "payments") => {
+  const navigate = (next: "worker" | "payments" | "runtime") => {
     if (next === "payments") {
       window.location.hash = "/payments";
+      return;
+    }
+    if (next === "runtime") {
+      window.location.hash = "/runtime";
       return;
     }
     window.location.hash = "/";
@@ -118,6 +127,20 @@ export default function App() {
     wasmWorkerRef.current = new Worker(new URL("./worker-runner.js", import.meta.url));
     log("WASM worker initialized");
     return wasmWorkerRef.current;
+  };
+
+  const setWorkerIdentity = (nextWorkerID: string, nextStatus?: string) => {
+    workerIdRef.current = nextWorkerID;
+    setWorkerId(nextWorkerID);
+    if (nextStatus) {
+      setWalletStatus(nextStatus);
+    }
+  };
+
+  const createRandomWorkerAddress = () => {
+    const bytes = new Uint8Array(20);
+    crypto.getRandomValues(bytes);
+    return `0x${Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")}`;
   };
 
   const workLoop = async () => {
@@ -165,8 +188,7 @@ export default function App() {
     try {
       const accounts = await provider.request({ method: "eth_requestAccounts" });
       if (Array.isArray(accounts) && accounts.length > 0 && typeof accounts[0] === "string") {
-        setWorkerId(accounts[0]);
-        setWalletStatus(`wallet: ${accounts[0]}`);
+        setWorkerIdentity(accounts[0], `wallet: ${accounts[0]}`);
         log("Wallet connected", { address: accounts[0] });
       }
     } catch (error) {
@@ -191,6 +213,13 @@ export default function App() {
     void workLoop();
   };
 
+  const startRandomWorker = () => {
+    const nextWorkerID = createRandomWorkerAddress();
+    setWorkerIdentity(nextWorkerID, `test worker: ${nextWorkerID}`);
+    log("Random test worker generated", { address: nextWorkerID });
+    startWorking();
+  };
+
   const stopWorking = () => {
     runningRef.current = false;
     setStatus("stopped");
@@ -204,6 +233,10 @@ export default function App() {
       heartbeatTimerRef.current = undefined;
     }
   };
+
+  useEffect(() => {
+    workerIdRef.current = workerId;
+  }, [workerId]);
 
   useEffect(() => {
     const onAnnounceProvider = (event: Event) => {
@@ -244,8 +277,33 @@ export default function App() {
   }, [log]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("auto_worker") !== "1") {
+      return;
+    }
+    if (autoWorkerStartedRef.current || runningRef.current) {
+      return;
+    }
+    autoWorkerStartedRef.current = true;
+    const nextWorkerID = createRandomWorkerAddress();
+    setWorkerIdentity(nextWorkerID, `test worker: ${nextWorkerID}`);
+    log("Auto worker mode enabled", { address: nextWorkerID });
+    window.setTimeout(() => {
+      startWorking();
+    }, 0);
+  }, [log]);
+
+  useEffect(() => {
     const syncRoute = () => {
-      setRoute(window.location.hash === "#/payments" ? "payments" : "worker");
+      if (window.location.hash === "#/payments") {
+        setRoute("payments");
+        return;
+      }
+      if (window.location.hash === "#/runtime") {
+        setRoute("runtime");
+        return;
+      }
+      setRoute("worker");
     };
     window.addEventListener("hashchange", syncRoute);
     syncRoute();
@@ -287,6 +345,14 @@ export default function App() {
             >
               Payments
             </Button>
+            <Button
+              type="button"
+              variant={route === "runtime" ? "default" : "outline"}
+              onClick={() => navigate("runtime")}
+            >
+              <Network className="size-4" />
+              Runtime
+            </Button>
           </CardContent>
         </Card>
 
@@ -311,6 +377,9 @@ export default function App() {
                   <div className="flex flex-wrap gap-2">
                     <Button onClick={() => void connectWallet()} type="button" variant="default">
                       Connect Wallet
+                    </Button>
+                    <Button onClick={startRandomWorker} type="button" variant="secondary" disabled={runningRef.current}>
+                      Quick Test Worker
                     </Button>
                     <Button
                       onClick={startWorking}
@@ -371,13 +440,15 @@ export default function App() {
               </CardContent>
             </Card>
           </>
-        ) : (
+        ) : route === "payments" ? (
           <PaymentsHistoryPage
             workerId={workerId}
             walletStatus={walletStatus}
             onWorkerIdChange={setWorkerId}
             onConnectWallet={connectWallet}
           />
+        ) : (
+          <LiveRuntimePage />
         )}
       </div>
     </main>

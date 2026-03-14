@@ -37,22 +37,46 @@ async function fetchWasmBytes(url) {
 }
 
 async function runWasm(wasmBytes, args, inputContext) {
+  const wasiState = { memory: null };
   let mod;
   try {
-    mod = await WebAssembly.instantiate(wasmBytes, createImportObject());
+    mod = await WebAssembly.instantiate(wasmBytes, createImportObject(wasiState));
   } catch (err) {
     throw new Error(`wasm instantiate failed: ${String(err)}`);
   }
 
   const exports = mod.instance.exports || {};
+  if (exports.memory instanceof WebAssembly.Memory) {
+    wasiState.memory = exports.memory;
+  }
   if (canRunJSON(exports)) {
     return executeRunJSON(exports, inputContext);
   }
   return executeRun(exports, args);
 }
 
-function createImportObject() {
+function createImportObject(wasiState) {
   const noop = () => 0;
+  const getMemoryView = () => {
+    const memory = wasiState?.memory;
+    return memory instanceof WebAssembly.Memory ? new DataView(memory.buffer) : null;
+  };
+  const writeClockValue = (ptr, valueNs) => {
+    const view = getMemoryView();
+    const offset = toInt(ptr, -1);
+    if (!view || offset < 0 || offset + 8 > view.byteLength) {
+      return 21;
+    }
+    view.setBigUint64(offset, valueNs, true);
+    return 0;
+  };
+  const nowMonotonicNs = () => {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+      return BigInt(Math.floor(performance.now() * 1_000_000));
+    }
+    return BigInt(Date.now()) * 1_000_000n;
+  };
+  const nowRealtimeNs = () => BigInt(Date.now()) * 1_000_000n;
   const env = {
     abort: noop,
     emscripten_notify_memory_growth: noop,
@@ -67,7 +91,12 @@ function createImportObject() {
     fd_fdstat_get: noop,
     fd_seek: noop,
     fd_write: noop,
-    clock_time_get: noop,
+    clock_res_get: (_clockID, resolutionPtr) => writeClockValue(resolutionPtr, 1_000_000n),
+    clock_time_get: (clockID, _precision, timePtr) => {
+      const id = toInt(clockID, 0);
+      const nowNs = id === 0 ? nowRealtimeNs() : nowMonotonicNs();
+      return writeClockValue(timePtr, nowNs);
+    },
     random_get: noop,
     proc_exit: (code) => {
       throw new Error(`wasi proc_exit(${Number(code) || 0})`);
