@@ -30,17 +30,20 @@ const (
 type adminWorkflowListResponse struct {
 	ActiveWorkflowID string   `json:"active_workflow_id,omitempty"`
 	LoadedWorkflowID string   `json:"loaded_workflow_id,omitempty"`
+	TopologyMode     string   `json:"topology_mode"`
 	UploadedIDs      []string `json:"uploaded_ids"`
 }
 
 type adminWorkflowActivateRequest struct {
-	WorkflowID string `json:"workflow_id"`
-	ResetState bool   `json:"reset_state,omitempty"`
+	WorkflowID   string `json:"workflow_id"`
+	ResetState   bool   `json:"reset_state,omitempty"`
+	TopologyMode string `json:"topology_mode,omitempty"`
 }
 
 type adminWorkflowActivateResponse struct {
 	WorkflowID      string `json:"workflow_id"`
 	ResetState      bool   `json:"reset_state"`
+	TopologyMode    string `json:"topology_mode"`
 	RecoveredNodes  int    `json:"recovered_nodes"`
 	EnqueuedJobs    int    `json:"enqueued_jobs"`
 	TopologicalSize int    `json:"topological_size"`
@@ -53,6 +56,15 @@ type adminWorkflowDeleteRequest struct {
 type adminWorkflowDeleteResponse struct {
 	WorkflowID string `json:"workflow_id"`
 	Deleted    bool   `json:"deleted"`
+}
+
+type adminRuntimeResponse struct {
+	ActiveWorkflowID string                             `json:"active_workflow_id,omitempty"`
+	LoadedWorkflowID string                             `json:"loaded_workflow_id,omitempty"`
+	TopologyMode     string                             `json:"topology_mode"`
+	Stats            scheduler.Stats                    `json:"stats"`
+	Workflow         *scheduler.WorkflowRuntimeSnapshot `json:"workflow,omitempty"`
+	Jobs             []scheduler.JobRuntimeSnapshot     `json:"jobs,omitempty"`
 }
 
 func withAdminToken(adminToken string, next http.HandlerFunc) http.HandlerFunc {
@@ -118,9 +130,18 @@ func adminWorkflowListHandler(
 			http.Error(w, "failed to read active workflow", http.StatusInternalServerError)
 			return
 		}
+		topologyMode, err := store.GetTopologyMode(r.Context())
+		if err != nil {
+			http.Error(w, "failed to read topology mode", http.StatusInternalServerError)
+			return
+		}
+		if topologyMode == "" {
+			topologyMode = string(workflowManager.TopologyMode())
+		}
 		writeJSON(w, adminWorkflowListResponse{
 			ActiveWorkflowID: activeID,
 			LoadedWorkflowID: loaded,
+			TopologyMode:     string(scheduler.NormalizeTopologyMode(topologyMode)),
 			UploadedIDs:      availableIDs,
 		}, http.StatusOK)
 	}
@@ -233,8 +254,17 @@ func adminWorkflowActivateHandler(
 			http.Error(w, "invalid workflow_id", http.StatusBadRequest)
 			return
 		}
+		if req.TopologyMode != "" && !scheduler.IsValidTopologyMode(req.TopologyMode) {
+			http.Error(w, "invalid topology_mode", http.StatusBadRequest)
+			return
+		}
 
-		resp, err := activateWorkflow(r.Context(), req.WorkflowID, req.ResetState, engine, workflowManager, store)
+		topologyMode := workflowManager.TopologyMode()
+		if req.TopologyMode != "" {
+			topologyMode = scheduler.NormalizeTopologyMode(req.TopologyMode)
+		}
+
+		resp, err := activateWorkflow(r.Context(), req.WorkflowID, req.ResetState, topologyMode, engine, workflowManager, store)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -289,10 +319,55 @@ func adminWorkflowDeleteHandler(
 	}
 }
 
+func adminRuntimeHandler(
+	engine *scheduler.Engine,
+	workflowManager *scheduler.WorkflowManager,
+	store *postgres.Store,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		activeID, err := store.GetActiveWorkflowID(r.Context())
+		if err != nil {
+			http.Error(w, "failed to read active workflow", http.StatusInternalServerError)
+			return
+		}
+		loadedIDs := workflowManager.WorkflowIDs()
+		loadedID := ""
+		if len(loadedIDs) > 0 {
+			loadedID = loadedIDs[0]
+		}
+
+		resp := adminRuntimeResponse{
+			ActiveWorkflowID: activeID,
+			LoadedWorkflowID: loadedID,
+			TopologyMode:     string(workflowManager.TopologyMode()),
+			Stats:            engine.StatsSnapshot(),
+		}
+
+		targetWorkflowID := loadedID
+		if targetWorkflowID == "" {
+			targetWorkflowID = activeID
+		}
+		if targetWorkflowID != "" {
+			if snapshot, ok := workflowManager.Snapshot(targetWorkflowID); ok {
+				resp.Workflow = &snapshot
+				resp.Jobs = engine.WorkflowJobSnapshots(targetWorkflowID)
+			}
+		}
+
+		writeJSON(w, resp, http.StatusOK)
+	}
+}
+
 func activateWorkflow(
 	ctx context.Context,
 	workflowID string,
 	resetState bool,
+	topologyMode scheduler.TopologyMode,
 	engine *scheduler.Engine,
 	workflowManager *scheduler.WorkflowManager,
 	store *postgres.Store,
@@ -313,8 +388,8 @@ func activateWorkflow(
 		completedOutputs = nil
 	}
 
-	// Preflight the workflow load before touching the currently active workflow.
 	probeManager := scheduler.NewWorkflowManager()
+	probeManager.SetTopologyMode(topologyMode)
 	if _, _, err := probeManager.LoadWorkflowWithCompleted(spec, completedOutputs); err != nil {
 		return adminWorkflowActivateResponse{}, err
 	}
@@ -331,21 +406,29 @@ func activateWorkflow(
 		engine.RemoveWorkflowJobs(id)
 	}
 
+	previousMode := workflowManager.TopologyMode()
+	workflowManager.SetTopologyMode(topologyMode)
 	result, jobs, err := workflowManager.LoadWorkflowWithCompleted(spec, completedOutputs)
 	if err != nil {
+		workflowManager.SetTopologyMode(previousMode)
 		return adminWorkflowActivateResponse{}, err
 	}
 	if err := enqueueWorkflowJobs(engine, jobs); err != nil {
 		workflowManager.DeleteWorkflow(result.WorkflowID)
+		workflowManager.SetTopologyMode(previousMode)
 		return adminWorkflowActivateResponse{}, err
 	}
 	if err := store.SetActiveWorkflowID(ctx, spec.ID); err != nil {
 		log.Printf("failed to persist active workflow id: %v", err)
 	}
+	if err := store.SetTopologyMode(ctx, string(topologyMode)); err != nil {
+		log.Printf("failed to persist topology mode: %v", err)
+	}
 
 	return adminWorkflowActivateResponse{
 		WorkflowID:      spec.ID,
 		ResetState:      resetState,
+		TopologyMode:    string(topologyMode),
 		RecoveredNodes:  len(completedOutputs),
 		EnqueuedJobs:    len(result.EnqueuedJobIDs),
 		TopologicalSize: len(result.TopologicalOrder),

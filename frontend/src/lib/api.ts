@@ -36,6 +36,49 @@ export type PaymentEvent = {
   payer?: string;
 };
 
+export type RuntimeStats = {
+  queued_jobs: number;
+  finalized_jobs: number;
+  pending_payments: number;
+  workers_online: number;
+  total_jobs: number;
+};
+
+export type RuntimeWorkflowNode = {
+  id: string;
+  depends_on?: string[];
+  priority?: number;
+  wasm_url: string;
+  reward_usdc: string;
+  completed: boolean;
+  enqueued: boolean;
+};
+
+export type RuntimeWorkflowSnapshot = {
+  workflow_id: string;
+  topological_order: string[];
+  nodes: RuntimeWorkflowNode[];
+};
+
+export type RuntimeJobSnapshot = {
+  job_id: string;
+  workflow_id: string;
+  node_id: string;
+  assigned_workers?: string[];
+  submitted_workers?: string[];
+  finalized: boolean;
+  accepted_workers: number;
+  queue_index: number;
+};
+
+export type RuntimeSnapshot = {
+  active_workflow_id?: string;
+  loaded_workflow_id?: string;
+  stats: RuntimeStats;
+  workflow?: RuntimeWorkflowSnapshot;
+  jobs?: RuntimeJobSnapshot[];
+};
+
 export type WorkflowNodeOutputChunk = {
   mode: "array" | "string" | "json" | "missing";
   offset: number;
@@ -132,14 +175,6 @@ export async function submitResult(
   return (await response.json()) as Decision;
 }
 
-export async function processPayments(): Promise<unknown> {
-  const response = await fetch("/api/payments/process", { method: "POST" });
-  if (!response.ok) {
-    throw new Error(`payments/process failed: ${response.status}`);
-  }
-  return response.json();
-}
-
 export async function fetchStats(): Promise<unknown> {
   const response = await fetch("/api/stats");
   if (!response.ok) {
@@ -159,4 +194,12 @@ export async function fetchPayments(workerID?: string): Promise<PaymentEvent[]> 
     throw new Error(`payments failed: ${response.status}`);
   }
   return (await response.json()) as PaymentEvent[];
+}
+
+export async function fetchRuntime(): Promise<RuntimeSnapshot> {
+  const response = await fetch("/api/runtime");
+  if (!response.ok) {
+    throw new Error(`runtime failed: ${response.status}`);
+  }
+  return (await response.json()) as RuntimeSnapshot;
 }

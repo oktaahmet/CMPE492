@@ -625,6 +625,9 @@
                 "reset_state": {
                     "type": "boolean"
                 },
+                "topology_mode": {
+                    "type": "string"
+                },
                 "workflow_id": {
                     "type": "string"
                 }
@@ -644,6 +647,9 @@
                 },
                 "topological_size": {
                     "type": "integer"
+                },
+                "topology_mode": {
+                    "type": "string"
                 },
                 "workflow_id": {
                     "type": "string"
@@ -676,6 +682,9 @@
                     "type": "string"
                 },
                 "loaded_workflow_id": {
+                    "type": "string"
+                },
+                "topology_mode": {
                     "type": "string"
                 },
                 "uploaded_ids": {

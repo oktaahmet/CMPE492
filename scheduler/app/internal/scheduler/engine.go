@@ -1,6 +1,9 @@
 package scheduler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -26,7 +29,7 @@ type Engine struct {
 	jobs               map[string]*jobState
 	queue              []string
 	paymentEvents      []PaymentEvent
-	paymentEventsByID   map[string]int
+	paymentEventsByID  map[string]int
 	workers            map[string]Worker
 	finalizedJobs      int
 	paymentClient      PaymentProvider
@@ -41,7 +44,6 @@ type jobState struct {
 	submittedPayload map[string]map[string]any
 	acceptedPayload  map[string]any
 	finalized        bool
-	failedRoundWorkers map[string]bool
 }
 
 type Assignment struct {
@@ -87,6 +89,17 @@ type PaymentEvent struct {
 	Payer        string `json:"payer,omitempty"`
 }
 
+type JobRuntimeSnapshot struct {
+	JobID            string   `json:"job_id"`
+	WorkflowID       string   `json:"workflow_id"`
+	NodeID           string   `json:"node_id"`
+	AssignedWorkers  []string `json:"assigned_workers,omitempty"`
+	SubmittedWorkers []string `json:"submitted_workers,omitempty"`
+	Finalized        bool     `json:"finalized"`
+	AcceptedWorkers  int      `json:"accepted_workers"`
+	QueueIndex       int      `json:"queue_index"`
+}
+
 func NewEngine(cfg Config) *Engine {
 	if cfg.ReplicationFactor < 1 {
 		cfg.ReplicationFactor = 1
@@ -96,9 +109,9 @@ func NewEngine(cfg Config) *Engine {
 	}
 
 	return &Engine{
-		cfg:     cfg,
-		jobs:    make(map[string]*jobState),
-		workers: make(map[string]Worker),
+		cfg:               cfg,
+		jobs:              make(map[string]*jobState),
+		workers:           make(map[string]Worker),
 		paymentEventsByID: make(map[string]int),
 	}
 }
@@ -159,9 +172,6 @@ func (e *Engine) AssignNext(workerID string) (Assignment, bool) {
 		if _, alreadySubmitted := state.submitted[workerID]; alreadySubmitted {
 			continue
 		}
-		if state.failedRoundWorkers[workerID] {
-			continue
-		}
 		if len(state.assignments)+len(state.submitted) >= e.cfg.ReplicationFactor {
 			continue
 		}
@@ -207,9 +217,13 @@ func (e *Engine) SubmitResult(req ResultSubmission) (Decision, error) {
 	if err := validateResultPayload(req.ResultPayload, state.job.ResultSchema); err != nil {
 		return Decision{}, err
 	}
+	submissionDigest, err := canonicalSubmissionDigest(req.ResultPayload)
+	if err != nil {
+		return Decision{}, err
+	}
 
 	delete(state.assignments, req.WorkerID)
-	state.submitted[req.WorkerID] = req.ResultSig
+	state.submitted[req.WorkerID] = submissionDigest
 	state.submittedPayload[req.WorkerID] = cloneJSONMap(req.ResultPayload)
 
 	acceptedSig, acceptedWorkers := majority(state.submitted)
@@ -333,6 +347,12 @@ func (e *Engine) RegisterOrHeartbeat(workerID string) Worker {
 	return e.touchWorkerLocked(workerID)
 }
 
+func (e *Engine) CleanupExpiredAssignments() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cleanupExpiredAssignments(time.Now())
+}
+
 func (e *Engine) StatsSnapshot() Stats {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -351,6 +371,58 @@ func (e *Engine) StatsSnapshot() Stats {
 		WorkersOnline:   e.onlineWorkersLocked(time.Now()),
 		TotalJobs:       len(e.jobs),
 	}
+}
+
+func (e *Engine) WorkflowJobSnapshots(workflowID string) []JobRuntimeSnapshot {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if strings.TrimSpace(workflowID) == "" {
+		return nil
+	}
+
+	queueIndexByJobID := make(map[string]int, len(e.queue))
+	for idx, jobID := range e.queue {
+		queueIndexByJobID[jobID] = idx
+	}
+
+	out := make([]JobRuntimeSnapshot, 0)
+	for jobID, state := range e.jobs {
+		if state == nil || state.job.WorkflowID != workflowID {
+			continue
+		}
+		assignedWorkers := make([]string, 0, len(state.assignments))
+		for workerID := range state.assignments {
+			assignedWorkers = append(assignedWorkers, workerID)
+		}
+		sort.Strings(assignedWorkers)
+
+		submittedWorkers := make([]string, 0, len(state.submitted))
+		for workerID := range state.submitted {
+			submittedWorkers = append(submittedWorkers, workerID)
+		}
+		sort.Strings(submittedWorkers)
+
+		_, acceptedWorkers := majority(state.submitted)
+		out = append(out, JobRuntimeSnapshot{
+			JobID:            jobID,
+			WorkflowID:       state.job.WorkflowID,
+			NodeID:           state.job.NodeID,
+			AssignedWorkers:  assignedWorkers,
+			SubmittedWorkers: submittedWorkers,
+			Finalized:        state.finalized,
+			AcceptedWorkers:  acceptedWorkers,
+			QueueIndex:       queueIndexByJobID[jobID],
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].QueueIndex == out[j].QueueIndex {
+			return out[i].NodeID < out[j].NodeID
+		}
+		return out[i].QueueIndex < out[j].QueueIndex
+	})
+	return out
 }
 
 func (e *Engine) ProcessPayments() int {
@@ -527,14 +599,6 @@ func jobClosedForAssignment(state *jobState) bool {
 }
 
 func resetSubmissionRoundLocked(state *jobState) {
-
-	if state.failedRoundWorkers == nil {
-        state.failedRoundWorkers = make(map[string]bool)
-    }
-    for workerID := range state.submitted {
-        state.failedRoundWorkers[workerID] = true
-    }
-
 	state.assignments = map[string]time.Time{}
 	state.submitted = map[string]string{}
 	state.submittedPayload = map[string]map[string]any{}
@@ -628,24 +692,24 @@ func cloneJSONMap(in map[string]any) map[string]any {
 		return nil
 	}
 	out := make(map[string]any, len(in))
-    for k, v := range in {
-        out[k] = cloneValue(v)
-    }
-    return out
+	for k, v := range in {
+		out[k] = cloneValue(v)
+	}
+	return out
 }
 func cloneValue(v any) any {
-    switch val := v.(type) {
-    case map[string]any:
-        return cloneJSONMap(val)
-    case []any:
-        out := make([]any, len(val))
-        for i, item := range val {
-            out[i] = cloneValue(item)
-        }
-        return out
-    default:
-        return val
-    }
+	switch val := v.(type) {
+	case map[string]any:
+		return cloneJSONMap(val)
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = cloneValue(item)
+		}
+		return out
+	default:
+		return val
+	}
 }
 
 func validateResultPayload(payload map[string]any, schema map[string]PayloadFieldRule) error {
@@ -675,6 +739,19 @@ func validateResultPayload(payload map[string]any, schema map[string]PayloadFiel
 		}
 	}
 	return nil
+}
+
+func canonicalSubmissionDigest(payload map[string]any) (string, error) {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("result payload canonicalization failed: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func matchesPayloadType(value any, expected string) bool {

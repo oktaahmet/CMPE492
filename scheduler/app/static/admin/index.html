@@ -127,6 +127,10 @@
           <h2>Select Active Workflow</h2>
           <div class="row">
             <select id="workflowSelect"></select>
+            <select id="topologyModeSelect">
+              <option value="plain">Plain Topological Sort</option>
+              <option value="priority_aware">Priority-Aware Topological Sort</option>
+            </select>
             <button id="activateBtn" type="button">Activate</button>
             <button id="deleteBtn" type="button" class="secondary">Delete</button>
             <button id="refreshBtn" type="button" class="secondary">Refresh</button>
@@ -139,6 +143,7 @@
           </div>
           <p class="muted" id="statusLine"></p>
         </div>
+
       </div>
 
       <div class="card">
@@ -156,6 +161,7 @@
       const cppFilesInput = document.getElementById("cppFilesInput");
       const cppFilesHint = document.getElementById("cppFilesHint");
       const cppFilesList = document.getElementById("cppFilesList");
+      const topologyModeSelect = document.getElementById("topologyModeSelect");
       const uploadBtn = document.getElementById("uploadBtn");
       const activateBtn = document.getElementById("activateBtn");
       const deleteBtn = document.getElementById("deleteBtn");
@@ -242,7 +248,8 @@
         const data = await api("/api/admin/workflows");
         const preferredID = data.active_workflow_id || data.loaded_workflow_id || "";
         setWorkflowOptions(data.uploaded_ids || [], preferredID);
-        statusLine.textContent = `active=${data.active_workflow_id || "-"} | loaded=${data.loaded_workflow_id || "-"}`;
+        topologyModeSelect.value = data.topology_mode || "plain";
+        statusLine.textContent = `active=${data.active_workflow_id || "-"} | loaded=${data.loaded_workflow_id || "-"} | mode=${data.topology_mode || "plain"}`;
         show(data);
       }
 
@@ -317,6 +324,7 @@
             body: JSON.stringify({
               workflow_id: workflowID,
               reset_state: Boolean(resetStateInput.checked),
+              topology_mode: topologyModeSelect.value || "plain",
             }),
           });
           show(data);

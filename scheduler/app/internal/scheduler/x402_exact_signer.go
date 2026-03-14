@@ -1,3 +1,5 @@
+//go:build !unit
+
 // Prepares a signed payment message, so a USDC transfer can be verified.
 
 package scheduler

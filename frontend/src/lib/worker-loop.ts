@@ -3,7 +3,6 @@ import {
   fetchWorkflowNodeOutputChunk,
   fetchWorkflowNodeOutput,
   type JsonObject,
-  processPayments,
   pullAssignment,
   registerWorker,
   submitResult,
@@ -330,9 +329,4 @@ export async function runWorkerOnce(deps: RunOnceDeps): Promise<void> {
   }
   const decision = await submitResult(assignment.job_id, workerAddress, wasmResult.result_sig, resultPayload);
   deps.log("Result submitted", compactDecisionForLog(decision as Record<string, unknown>));
-
-  if (decision.finalized) {
-    const paymentResult = await processPayments();
-    deps.log("Payments processed", paymentResult);
-  }
 }

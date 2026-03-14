@@ -631,6 +631,9 @@ const docTemplate = `{
                 "reset_state": {
                     "type": "boolean"
                 },
+                "topology_mode": {
+                    "type": "string"
+                },
                 "workflow_id": {
                     "type": "string"
                 }
@@ -650,6 +653,9 @@ const docTemplate = `{
                 },
                 "topological_size": {
                     "type": "integer"
+                },
+                "topology_mode": {
+                    "type": "string"
                 },
                 "workflow_id": {
                     "type": "string"
@@ -682,6 +688,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "loaded_workflow_id": {
+                    "type": "string"
+                },
+                "topology_mode": {
                     "type": "string"
                 },
                 "uploaded_ids": {

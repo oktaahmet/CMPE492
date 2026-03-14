@@ -1,3 +1,5 @@
+//go:build !unit
+
 // Calls the facilitator /verify and /settle API endpoints.
 
 package scheduler

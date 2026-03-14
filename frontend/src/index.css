@@ -127,3 +127,16 @@
     @apply font-sans;
     }
 }
+
+@keyframes runtime-edge-flow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.runtime-edge-flow {
+  animation: runtime-edge-flow 1.35s linear infinite;
+}
