@@ -24,8 +24,8 @@ type RegisterWorkerRequest struct {
 	WorkerID string `json:"worker_id"`
 }
 
-type ProcessPaymentsResponse struct {
-	ProcessedCount int `json:"processed_count"`
+type RequeuePaymentsResponse struct {
+	RequeuedCount int `json:"requeued_count"`
 }
 
 type NodeOutputChunkResponse struct {
@@ -41,6 +41,12 @@ type NodeOutputChunkResponse struct {
 	Data       string `json:"data,omitempty"`
 }
 
+type HealthResponse struct {
+	Status    string            `json:"status"`
+	Timestamp string            `json:"timestamp"`
+	Checks    map[string]string `json:"checks,omitempty"`
+}
+
 // @title           x402 Scheduler API
 // @version         1.0
 // @description     Worker registration, job pull, result submit, payments, stats.
@@ -49,6 +55,14 @@ type NodeOutputChunkResponse struct {
 func main() {
 	replicationFactor := loadReplicationFactor()
 	maxResultPayloadBytes := loadMaxResultPayloadBytes()
+	var workerAuth *workerAuth
+	if !loadWorkerAuthDisabled() {
+		auth, err := newWorkerAuth(loadWorkerJWTSecret(), loadWorkerJWTTTL(), loadWorkerAuthChallengeTTL())
+		if err != nil {
+			log.Fatalf("failed to initialize worker auth: %v", err)
+		}
+		workerAuth = auth
+	}
 	engine := scheduler.NewEngine(scheduler.Config{
 		ReplicationFactor: replicationFactor,
 		AssignmentTTL:     30 * time.Second,
@@ -82,15 +96,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.HandleFunc("/api/workers/register", registerWorkerHandler(engine))
-	http.HandleFunc("/api/pull", pullHandler(engine))
-	http.HandleFunc("/api/result", resultHandler(engine, workflowManager, store, maxResultPayloadBytes))
+	if workerAuth != nil {
+		http.HandleFunc("/api/auth/challenge", workerAuthChallengeHandler(workerAuth))
+		http.HandleFunc("/api/auth/verify", workerAuthVerifyHandler(workerAuth))
+	}
+	http.HandleFunc("/api/workers/register", registerWorkerHandler(engine, workerAuth))
+	http.HandleFunc("/api/pull", pullHandler(engine, workerAuth))
+	http.HandleFunc("/api/result", resultHandler(engine, workflowManager, store, maxResultPayloadBytes, workerAuth))
 	http.HandleFunc("/api/workflow/node-output", workflowNodeOutputHandler(store))
 	http.HandleFunc("/api/workflow/node-output/chunk", workflowNodeOutputChunkHandler(store))
-	http.HandleFunc("/api/payments", paymentsHandler(store))
-	http.HandleFunc("/api/payments/process", processPaymentsHandler(engine, store))
+	http.HandleFunc("/api/payments", paymentsHandler(store, workerAuth))
 	http.HandleFunc("/api/stats", statsHandler(engine))
-	http.HandleFunc("/api/runtime", adminRuntimeHandler(engine, workflowManager, store))
+	http.HandleFunc("/api/runtime", runtimeHandler(engine, workflowManager, store))
+	http.HandleFunc("/healthz", healthHandler())
+	http.HandleFunc("/readyz", readinessHandler(store))
 	adminToken := loadAdminAPIToken()
 	if adminToken != "" {
 		http.HandleFunc(
@@ -110,8 +129,8 @@ func main() {
 			withAdminToken(adminToken, adminWorkflowDeleteHandler(engine, workflowManager, store)),
 		)
 		http.HandleFunc(
-			"/api/admin/runtime",
-			withAdminToken(adminToken, adminRuntimeHandler(engine, workflowManager, store)),
+			"/api/admin/payments/requeue-interrupted",
+			withAdminToken(adminToken, adminRequeueInterruptedPaymentsHandler(engine, store)),
 		)
 	} else {
 		log.Println("ADMIN_API_TOKEN not set: admin endpoints disabled")
@@ -138,7 +157,7 @@ func main() {
 // @Failure      400   {string}  string
 // @Failure      405   {string}  string
 // @Router       /api/workers/register [post]
-func registerWorkerHandler(engine *scheduler.Engine) http.HandlerFunc {
+func registerWorkerHandler(engine *scheduler.Engine, auth *workerAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -149,11 +168,23 @@ func registerWorkerHandler(engine *scheduler.Engine) http.HandlerFunc {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if req.WorkerID == "" {
-			http.Error(w, "worker_id is required", http.StatusBadRequest)
+		normalizedWorkerID, err := normalizeWorkerID(req.WorkerID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, engine.RegisterOrHeartbeat(req.WorkerID), http.StatusOK)
+		if auth != nil {
+			authWorkerID, err := auth.authenticateRequest(r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+			if !sameWorkerID(authWorkerID, normalizedWorkerID) {
+				http.Error(w, "worker token does not match worker_id", http.StatusForbidden)
+				return
+			}
+		}
+		writeJSON(w, engine.RegisterOrHeartbeat(normalizedWorkerID), http.StatusOK)
 	}
 }
 
@@ -167,17 +198,28 @@ func registerWorkerHandler(engine *scheduler.Engine) http.HandlerFunc {
 // @Failure      400        {string}  string
 // @Failure      405        {string}  string
 // @Router       /api/pull [get]
-func pullHandler(engine *scheduler.Engine) http.HandlerFunc {
+func pullHandler(engine *scheduler.Engine, auth *workerAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		workerID := r.URL.Query().Get("worker_id")
-		if workerID == "" {
-			http.Error(w, "worker_id is required", http.StatusBadRequest)
+		workerID, err := normalizeWorkerID(r.URL.Query().Get("worker_id"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if auth != nil {
+			authWorkerID, err := auth.authenticateRequest(r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+			if !sameWorkerID(authWorkerID, workerID) {
+				http.Error(w, "worker token does not match worker_id", http.StatusForbidden)
+				return
+			}
 		}
 		engine.RegisterOrHeartbeat(workerID)
 
@@ -205,6 +247,7 @@ func resultHandler(
 	workflowManager *scheduler.WorkflowManager,
 	store *postgres.Store,
 	maxPayloadBytes int64,
+	auth *workerAuth,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -222,6 +265,23 @@ func resultHandler(
 			}
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
+		}
+		var err error
+		req.WorkerID, err = normalizeWorkerID(req.WorkerID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if auth != nil {
+			authWorkerID, err := auth.authenticateRequest(r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+			if !sameWorkerID(authWorkerID, req.WorkerID) {
+				http.Error(w, "worker token does not match worker_id", http.StatusForbidden)
+				return
+			}
 		}
 
 		decision, err := engine.SubmitResult(req)
@@ -465,13 +525,41 @@ func parsePositiveIntQuery(raw string, fallback int) int {
 // @Success      200  {array}   scheduler.PaymentEvent
 // @Failure      405  {string}  string
 // @Router       /api/payments [get]
-func paymentsHandler(store *postgres.Store) http.HandlerFunc {
+func paymentsHandler(store *postgres.Store, auth *workerAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		workerID := strings.TrimSpace(r.URL.Query().Get("worker_id"))
+		if auth != nil {
+			authWorkerID, err := auth.authenticateRequest(r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+			if workerID == "" {
+				workerID = authWorkerID
+			} else {
+				normalizedWorkerID, normalizeErr := normalizeWorkerID(workerID)
+				if normalizeErr != nil {
+					http.Error(w, normalizeErr.Error(), http.StatusBadRequest)
+					return
+				}
+				if !sameWorkerID(authWorkerID, normalizedWorkerID) {
+					http.Error(w, "worker token does not match worker_id", http.StatusForbidden)
+					return
+				}
+				workerID = normalizedWorkerID
+			}
+		} else if workerID != "" {
+			normalizedWorkerID, err := normalizeWorkerID(workerID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			workerID = normalizedWorkerID
+		}
 		events, err := store.ListPaymentEvents(r.Context(), workerID)
 		if err != nil {
 			http.Error(w, "failed to load payments", http.StatusInternalServerError)
@@ -481,26 +569,28 @@ func paymentsHandler(store *postgres.Store) http.HandlerFunc {
 	}
 }
 
-// processPaymentsHandler godoc
-// @Summary      Process pending payments
-// @Tags         payments
-// @Produce      json
-// @Success      200  {object}  ProcessPaymentsResponse
-// @Failure      405  {string}  string
-// @Router       /api/payments/process [post]
-func processPaymentsHandler(engine *scheduler.Engine, store *postgres.Store) http.HandlerFunc {
+func adminRequeueInterruptedPaymentsHandler(engine *scheduler.Engine, store *postgres.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		processedCount, err := runPaymentSweep(r.Context(), engine, store)
-		if err != nil {
-			log.Printf("persist payments failed: err=%v", err)
+
+		requeued := engine.RequeuePaymentsByStatus(
+			"needs_reconciliation",
+			"retry",
+			"manually requeued after interrupted processing review",
+		)
+		if err := store.UpsertPaymentEvents(r.Context(), engine.PaymentQueueSnapshot()); err != nil {
+			http.Error(w, "failed to persist requeued payments", http.StatusInternalServerError)
+			return
 		}
-		writeJSON(w, ProcessPaymentsResponse{
-			ProcessedCount: processedCount,
-		}, http.StatusOK)
+
+		if requeued > 0 {
+			triggerPaymentProcessingAsync(engine, store)
+		}
+
+		writeJSON(w, RequeuePaymentsResponse{RequeuedCount: requeued}, http.StatusOK)
 	}
 }
 
@@ -581,7 +671,12 @@ func startAssignmentJanitor(engine *scheduler.Engine, interval time.Duration) fu
 }
 
 func runPaymentSweep(ctx context.Context, engine *scheduler.Engine, store *postgres.Store) (int, error) {
-	processedCount := engine.ProcessPayments()
+	processedCount, err := engine.ProcessPayments(func(events []scheduler.PaymentEvent) error {
+		return store.UpsertPaymentEvents(ctx, events)
+	})
+	if err != nil {
+		return processedCount, err
+	}
 	if err := store.UpsertPaymentEvents(ctx, engine.PaymentQueueSnapshot()); err != nil {
 		return processedCount, err
 	}
@@ -591,7 +686,7 @@ func runPaymentSweep(ctx context.Context, engine *scheduler.Engine, store *postg
 func pendingPaymentCount(events []scheduler.PaymentEvent) int {
 	count := 0
 	for _, event := range events {
-		if event.Status == "pending_x402_transfer" || event.Status == "retry" {
+		if event.Status == "pending_x402_transfer" || event.Status == "retry" || event.Status == "processing_x402_transfer" {
 			count++
 		}
 	}
@@ -612,6 +707,52 @@ func statsHandler(engine *scheduler.Engine) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, engine.StatsSnapshot(), http.StatusOK)
+	}
+}
+
+func healthHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, HealthResponse{
+			Status:    "ok",
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Checks: map[string]string{
+				"http": "ok",
+			},
+		}, http.StatusOK)
+	}
+}
+
+func readinessHandler(store *postgres.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		resp := HealthResponse{
+			Status:    "ready",
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Checks: map[string]string{
+				"http": "ok",
+				"db":   "ok",
+			},
+		}
+
+		if err := store.Ping(ctx); err != nil {
+			resp.Status = "not_ready"
+			resp.Checks["db"] = fmt.Sprintf("error: %v", err)
+			writeJSON(w, resp, http.StatusServiceUnavailable)
+			return
+		}
+
+		writeJSON(w, resp, http.StatusOK)
 	}
 }
 

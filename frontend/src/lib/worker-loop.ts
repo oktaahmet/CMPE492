@@ -17,10 +17,13 @@ export type WasmWorkerResponse = {
 };
 
 const WASM_WORKER_TIMEOUT_MS = 45_000;
+const MAX_INLINE_DEP_ARRAY_ITEMS = 10_000;
+const MAX_INLINE_DEP_TEXT_CHARS = 200_000;
 
 type RunOnceDeps = {
   workerID: string;
   ensureWasmWorker: () => Worker;
+  resetWasmWorker: (reason: string) => void;
   log: (message: string, obj?: unknown) => void;
   setAssignmentText: (value: string) => void;
 };
@@ -102,6 +105,7 @@ function compactDecisionForLog(decision: Record<string, unknown>): Record<string
 
 function executeWasmJob(
   ensureWasmWorker: () => Worker,
+  resetWasmWorker: (reason: string) => void,
   assignment: Assignment,
   executionArgs: unknown[],
   executionContext: ExecutionContext,
@@ -109,33 +113,53 @@ function executeWasmJob(
   return new Promise<WasmWorkerResponse>((resolve, reject) => {
     const worker = ensureWasmWorker();
     const requestID = `${assignment.job_id}-${Date.now()}`;
-    const timeoutID = window.setTimeout(
-      () => reject(new Error("wasm worker timeout")),
-      WASM_WORKER_TIMEOUT_MS,
-    );
+    let settled = false;
 
     const onMessage = (event: MessageEvent<WasmWorkerResponse>) => {
       const data = event.data;
-      if (!data || data.req_id !== requestID) {
+      if (settled || !data || data.req_id !== requestID) {
         return;
       }
-      worker.removeEventListener("message", onMessage);
-      window.clearTimeout(timeoutID);
 
       if (data.error) {
-        reject(new Error(data.error));
+        fail(new Error(data.error), "worker_error");
         return;
       }
+      settled = true;
+      cleanup();
       resolve(data);
     };
 
+    const cleanup = () => {
+      worker.removeEventListener("message", onMessage);
+      window.clearTimeout(timeoutID);
+    };
+
+    const fail = (error: Error, reason: string) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resetWasmWorker(reason);
+      reject(error);
+    };
+
+    const timeoutID = window.setTimeout(() => {
+      fail(new Error("wasm worker timeout"), "timeout");
+    }, WASM_WORKER_TIMEOUT_MS);
+
     worker.addEventListener("message", onMessage);
-    worker.postMessage({
-      req_id: requestID,
-      wasm_url: assignment.wasm_url,
-      args: executionArgs,
-      input_context: executionContext,
-    });
+    try {
+      worker.postMessage({
+        req_id: requestID,
+        wasm_url: assignment.wasm_url,
+        args: executionArgs,
+        input_context: executionContext,
+      });
+    } catch (error) {
+      fail(new Error(String(error)), "post_message_error");
+    }
   });
 }
 
@@ -263,6 +287,25 @@ async function buildExecutionContext(
     };
   }
 
+  await Promise.all(
+    deps.map(async (dep) => {
+      const chunk = await fetchWorkflowNodeOutputChunk(dep.workflow_id, dep.node_id, 0, 1);
+      if (chunk.mode === "array" && (chunk.total_items ?? 0) > MAX_INLINE_DEP_ARRAY_ITEMS) {
+        throw new Error(
+          `dependency ${dep.node_id} too large for inline fetch (${chunk.total_items} items); use chunked consumption`,
+        );
+      }
+      if (
+        (chunk.mode === "string" || chunk.mode === "json") &&
+        (chunk.total_chars ?? 0) > MAX_INLINE_DEP_TEXT_CHARS
+      ) {
+        throw new Error(
+          `dependency ${dep.node_id} too large for inline fetch (${chunk.total_chars} chars); use chunked consumption`,
+        );
+      }
+    }),
+  );
+
   const fetched = await Promise.all(
     deps.map(async (dep) => {
       const payload = await fetchWorkflowNodeOutput(dep.workflow_id, dep.node_id);
@@ -313,7 +356,13 @@ export async function runWorkerOnce(deps: RunOnceDeps): Promise<void> {
     wasmResult = syntheticResult;
   } else {
     const execution = await buildExecutionContext(assignment, deps.log);
-    wasmResult = await executeWasmJob(deps.ensureWasmWorker, assignment, execution.args, execution);
+    wasmResult = await executeWasmJob(
+      deps.ensureWasmWorker,
+      deps.resetWasmWorker,
+      assignment,
+      execution.args,
+      execution,
+    );
   }
   deps.log("WASM executed", compactWorkerResponseForLog(wasmResult));
 

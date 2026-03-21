@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -25,6 +26,7 @@ const (
 	uploadedWorkflowsDir = "workflows/uploaded"
 	uploadedWorkflowFile = "workflow.json"
 	uploadedCPPDirName   = "cpp"
+	maxUploadFilenameLen = 128
 )
 
 type adminWorkflowListResponse struct {
@@ -120,11 +122,7 @@ func adminWorkflowListHandler(
 			http.Error(w, "failed to list workflows", http.StatusInternalServerError)
 			return
 		}
-		loadedIDs := workflowManager.WorkflowIDs()
-		loaded := ""
-		if len(loadedIDs) > 0 {
-			loaded = loadedIDs[0]
-		}
+		loaded := workflowManager.ActiveWorkflowID()
 		activeID, err := store.GetActiveWorkflowID(r.Context())
 		if err != nil {
 			http.Error(w, "failed to read active workflow", http.StatusInternalServerError)
@@ -188,6 +186,10 @@ func adminWorkflowUploadHandler(
 			http.Error(w, "workflow id must use letters, numbers, underscore or dash", http.StatusBadRequest)
 			return
 		}
+		if err := validateUploadedWorkflowWasmURLs(spec); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
 		cppHeaders := r.MultipartForm.File["cpp_files"]
 		if len(cppHeaders) == 0 {
@@ -195,7 +197,7 @@ func adminWorkflowUploadHandler(
 			return
 		}
 
-		if workflowManager.HasWorkflow(spec.ID) {
+		if workflowManager.ActiveWorkflowID() == spec.ID {
 			http.Error(w, "workflow already loaded; activate another workflow first", http.StatusConflict)
 			return
 		}
@@ -205,10 +207,16 @@ func adminWorkflowUploadHandler(
 		}
 
 		if err := writeUploadedWorkflow(spec.ID, prettyJSON, cppHeaders); err != nil {
+			if cleanupErr := cleanupUploadedWorkflowArtifacts(spec.ID); cleanupErr != nil {
+				log.Printf("failed to cleanup uploaded workflow after write error: workflow_id=%s err=%v", spec.ID, cleanupErr)
+			}
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if err := ensureWorkflowWasmArtifacts(spec, uploadedWorkflowSpecPath(spec.ID)); err != nil {
+			if cleanupErr := cleanupUploadedWorkflowArtifacts(spec.ID); cleanupErr != nil {
+				log.Printf("failed to cleanup uploaded workflow after compile error: workflow_id=%s err=%v", spec.ID, cleanupErr)
+			}
 			http.Error(w, fmt.Sprintf("workflow uploaded but wasm build failed: %v", err), http.StatusBadRequest)
 			return
 		}
@@ -319,7 +327,7 @@ func adminWorkflowDeleteHandler(
 	}
 }
 
-func adminRuntimeHandler(
+func runtimeHandler(
 	engine *scheduler.Engine,
 	workflowManager *scheduler.WorkflowManager,
 	store *postgres.Store,
@@ -335,11 +343,7 @@ func adminRuntimeHandler(
 			http.Error(w, "failed to read active workflow", http.StatusInternalServerError)
 			return
 		}
-		loadedIDs := workflowManager.WorkflowIDs()
-		loadedID := ""
-		if len(loadedIDs) > 0 {
-			loadedID = loadedIDs[0]
-		}
+		loadedID := workflowManager.ActiveWorkflowID()
 
 		resp := adminRuntimeResponse{
 			ActiveWorkflowID: activeID,
@@ -352,8 +356,8 @@ func adminRuntimeHandler(
 		if targetWorkflowID == "" {
 			targetWorkflowID = activeID
 		}
-		if targetWorkflowID != "" {
-			if snapshot, ok := workflowManager.Snapshot(targetWorkflowID); ok {
+		if targetWorkflowID != "" && targetWorkflowID == loadedID {
+			if snapshot, ok := workflowManager.Snapshot(); ok {
 				resp.Workflow = &snapshot
 				resp.Jobs = engine.WorkflowJobSnapshots(targetWorkflowID)
 			}
@@ -394,16 +398,16 @@ func activateWorkflow(
 		return adminWorkflowActivateResponse{}, err
 	}
 
-	current := workflowManager.WorkflowIDs()
+	current := workflowManager.ActiveWorkflowID()
 	if resetState {
 		if err := store.DeleteWorkflowState(ctx, spec.ID); err != nil {
 			return adminWorkflowActivateResponse{}, fmt.Errorf("failed to reset workflow state: %w", err)
 		}
 	}
 
-	for _, id := range current {
-		workflowManager.DeleteWorkflow(id)
-		engine.RemoveWorkflowJobs(id)
+	if current != "" {
+		workflowManager.ClearWorkflow()
+		engine.RemoveWorkflowJobs(current)
 	}
 
 	previousMode := workflowManager.TopologyMode()
@@ -414,7 +418,7 @@ func activateWorkflow(
 		return adminWorkflowActivateResponse{}, err
 	}
 	if err := enqueueWorkflowJobs(engine, jobs); err != nil {
-		workflowManager.DeleteWorkflow(result.WorkflowID)
+		workflowManager.ClearWorkflow()
 		workflowManager.SetTopologyMode(previousMode)
 		return adminWorkflowActivateResponse{}, err
 	}
@@ -459,8 +463,10 @@ func deleteWorkflow(
 		return fmt.Errorf("only uploaded workflows can be deleted: %s", workflowID)
 	}
 
-	workflowManager.DeleteWorkflow(workflowID)
-	engine.RemoveWorkflowJobs(workflowID)
+	if workflowManager.ActiveWorkflowID() == workflowID {
+		workflowManager.ClearWorkflow()
+		engine.RemoveWorkflowJobs(workflowID)
+	}
 
 	if err := store.DeleteWorkflowState(ctx, workflowID); err != nil {
 		return fmt.Errorf("failed to delete workflow state: %w", err)
@@ -493,8 +499,8 @@ func loadWorkflowFromPath(
 	if err != nil {
 		return scheduler.WorkflowSpec{}, scheduler.WorkflowLoadResult{}, 0, err
 	}
-	if workflowManager.HasWorkflow(normalized.ID) {
-		return normalized, scheduler.WorkflowLoadResult{}, 0, fmt.Errorf("workflow already loaded: %s", normalized.ID)
+	if activeID := workflowManager.ActiveWorkflowID(); activeID != "" {
+		return normalized, scheduler.WorkflowLoadResult{}, 0, fmt.Errorf("workflow already loaded: %s", activeID)
 	}
 
 	result, jobs, err := workflowManager.LoadWorkflowWithCompleted(normalized, completedOutputs)
@@ -502,7 +508,7 @@ func loadWorkflowFromPath(
 		return scheduler.WorkflowSpec{}, scheduler.WorkflowLoadResult{}, 0, err
 	}
 	if err := enqueueWorkflowJobs(engine, jobs); err != nil {
-		workflowManager.DeleteWorkflow(result.WorkflowID)
+		workflowManager.ClearWorkflow()
 		return scheduler.WorkflowSpec{}, scheduler.WorkflowLoadResult{}, 0, err
 	}
 
@@ -521,6 +527,13 @@ func prepareWorkflowLoad(
 	normalized, err := scheduler.ValidateWorkflowSpec(spec)
 	if err != nil {
 		return scheduler.WorkflowSpec{}, nil, err
+	}
+	if insideUploadedDir, insideErr := pathInsideDir(path, uploadedWorkflowsDir); insideErr != nil {
+		return scheduler.WorkflowSpec{}, nil, insideErr
+	} else if insideUploadedDir {
+		if err := validateUploadedWorkflowWasmURLs(normalized); err != nil {
+			return scheduler.WorkflowSpec{}, nil, err
+		}
 	}
 	if err := ensureWorkflowWasmArtifacts(normalized, path); err != nil {
 		return scheduler.WorkflowSpec{}, nil, err
@@ -598,11 +611,16 @@ func writeUploadedWorkflow(workflowID string, workflowJSON []byte, cppHeaders []
 		return err
 	}
 
+	seenFilenames := make(map[string]bool, len(cppHeaders))
 	for _, header := range cppHeaders {
 		filename, err := sanitizeUploadFilename(header.Filename, ".cpp")
 		if err != nil {
 			return fmt.Errorf("invalid cpp file %q: %w", header.Filename, err)
 		}
+		if seenFilenames[filename] {
+			return fmt.Errorf("duplicate cpp file name: %s", filename)
+		}
+		seenFilenames[filename] = true
 		if err := writeMultipartFile(header, filepath.Join(cppDir, filename)); err != nil {
 			return err
 		}
@@ -616,9 +634,25 @@ func sanitizeUploadFilename(name, requiredExt string) (string, error) {
 	if base == "" || base == "." || base == ".." {
 		return "", fmt.Errorf("filename is empty")
 	}
+	if len(base) > maxUploadFilenameLen {
+		return "", fmt.Errorf("filename is too long")
+	}
+	if strings.IndexByte(base, 0) >= 0 {
+		return "", fmt.Errorf("filename contains null byte")
+	}
 	ext := strings.ToLower(filepath.Ext(base))
 	if ext != strings.ToLower(requiredExt) {
 		return "", fmt.Errorf("expected %s extension", requiredExt)
+	}
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	if stem == "" {
+		return "", fmt.Errorf("filename stem is empty")
+	}
+	for _, r := range stem {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return "", fmt.Errorf("filename must use letters, numbers, underscore or dash")
 	}
 	return base, nil
 }
@@ -642,7 +676,7 @@ func writeMultipartFile(header *multipart.FileHeader, dstPath string) error {
 	return nil
 }
 
-func discoverUploadedWorkflowIDs() ([]string, error) {
+func discoverWorkflowIDs() ([]string, error) {
 	index, err := discoverWorkflowSpecIndex()
 	if err != nil {
 		return nil, err
@@ -654,10 +688,6 @@ func discoverUploadedWorkflowIDs() ([]string, error) {
 	}
 	sort.Strings(ids)
 	return ids, nil
-}
-
-func discoverWorkflowIDs() ([]string, error) {
-	return discoverUploadedWorkflowIDs()
 }
 
 func resolveWorkflowSpecPathByID(workflowID string) (string, error) {
@@ -673,16 +703,20 @@ func resolveWorkflowSpecPathByID(workflowID string) (string, error) {
 }
 
 func discoverWorkflowSpecIndex() (map[string]string, error) {
+	return discoverWorkflowSpecIndexUnder(workflowsRootDir)
+}
+
+func discoverWorkflowSpecIndexUnder(rootDir string) (map[string]string, error) {
 	index := map[string]string{}
 
-	if _, err := os.Stat(workflowsRootDir); err != nil {
+	if _, err := os.Stat(rootDir); err != nil {
 		if os.IsNotExist(err) {
 			return index, nil
 		}
 		return nil, err
 	}
 
-	err := filepath.WalkDir(workflowsRootDir, func(path string, d fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -706,7 +740,16 @@ func discoverWorkflowSpecIndex() (map[string]string, error) {
 		}
 
 		if existing, exists := index[normalized.ID]; exists {
-			if strings.Contains(existing, string(filepath.Separator)+"uploaded"+string(filepath.Separator)) {
+			existingUploaded := isUploadedWorkflowPath(existing)
+			candidateUploaded := isUploadedWorkflowPath(path)
+
+			// Uploaded workflows intentionally take precedence over bundled ones,
+			// regardless of traversal order.
+			if existingUploaded && !candidateUploaded {
+				return nil
+			}
+			if !existingUploaded && candidateUploaded {
+				index[normalized.ID] = path
 				return nil
 			}
 		}
@@ -718,6 +761,10 @@ func discoverWorkflowSpecIndex() (map[string]string, error) {
 	}
 
 	return index, nil
+}
+
+func isUploadedWorkflowPath(path string) bool {
+	return strings.Contains(path, string(filepath.Separator)+"uploaded"+string(filepath.Separator))
 }
 
 func ensureWorkflowWasmArtifacts(spec scheduler.WorkflowSpec, specPath string) error {
@@ -750,6 +797,27 @@ func ensureWorkflowWasmArtifacts(spec scheduler.WorkflowSpec, specPath string) e
 		}
 		built[relOut] = true
 	}
+	return nil
+}
+
+func validateUploadedWorkflowWasmURLs(spec scheduler.WorkflowSpec) error {
+	expectedPrefix := path.Join("uploaded", spec.ID) + "/"
+
+	for _, node := range spec.Nodes {
+		relOut, err := wasmRelativePathFromURL(node.WasmURL)
+		if err != nil {
+			return fmt.Errorf("node %s wasm_url invalid: %w", node.ID, err)
+		}
+		if !strings.HasPrefix(relOut, expectedPrefix) {
+			return fmt.Errorf(
+				"node %s wasm_url must stay under /%s (got /%s)",
+				node.ID,
+				expectedPrefix,
+				relOut,
+			)
+		}
+	}
+
 	return nil
 }
 
@@ -878,6 +946,16 @@ func uploadedWorkflowDir(workflowID string) string {
 
 func uploadedWorkflowSpecPath(workflowID string) string {
 	return filepath.Join(uploadedWorkflowDir(workflowID), uploadedWorkflowFile)
+}
+
+func cleanupUploadedWorkflowArtifacts(workflowID string) error {
+	if strings.TrimSpace(workflowID) == "" {
+		return nil
+	}
+	if err := os.RemoveAll(uploadedWorkflowDir(workflowID)); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join("static", "uploaded", workflowID))
 }
 
 func pathInsideDir(path string, root string) (bool, error) {

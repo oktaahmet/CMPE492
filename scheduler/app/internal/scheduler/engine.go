@@ -89,6 +89,14 @@ type PaymentEvent struct {
 	Payer        string `json:"payer,omitempty"`
 }
 
+const (
+	paymentStatusPending    = "pending_x402_transfer"
+	paymentStatusProcessing = "processing_x402_transfer"
+	paymentStatusRetry      = "retry"
+	paymentStatusReview     = "needs_reconciliation"
+	paymentStatusConfirmed  = "confirmed"
+)
+
 type JobRuntimeSnapshot struct {
 	JobID            string   `json:"job_id"`
 	WorkflowID       string   `json:"workflow_id"`
@@ -285,7 +293,14 @@ func (e *Engine) RestorePendingPayments(events []PaymentEvent) {
 	}
 
 	for _, event := range events {
-		if event.Status != "pending_x402_transfer" && event.Status != "retry" {
+		switch event.Status {
+		case paymentStatusPending, paymentStatusRetry:
+		case paymentStatusProcessing:
+			event.Status = paymentStatusReview
+			if strings.TrimSpace(event.LastError) == "" {
+				event.LastError = "restored after interrupted processing; review before retry"
+			}
+		default:
 			continue
 		}
 		if seen[event.ID] {
@@ -295,6 +310,33 @@ func (e *Engine) RestorePendingPayments(events []PaymentEvent) {
 		e.paymentEvents = append(e.paymentEvents, event)
 		seen[event.ID] = true
 	}
+}
+
+func (e *Engine) RequeuePaymentsByStatus(fromStatus string, toStatus string, reason string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	fromStatus = strings.TrimSpace(fromStatus)
+	toStatus = strings.TrimSpace(toStatus)
+	if fromStatus == "" || toStatus == "" {
+		return 0
+	}
+
+	updatedAt := time.Now().UTC().Format(time.RFC3339)
+	count := 0
+	for i := range e.paymentEvents {
+		event := &e.paymentEvents[i]
+		if event.Status != fromStatus {
+			continue
+		}
+		event.Status = toStatus
+		event.UpdatedAt = updatedAt
+		if trimmed := strings.TrimSpace(reason); trimmed != "" {
+			event.LastError = trimmed
+		}
+		count++
+	}
+	return count
 }
 
 func (e *Engine) JobIdentity(jobID string) (workflowID string, nodeID string, ok bool) {
@@ -350,7 +392,9 @@ func (e *Engine) RegisterOrHeartbeat(workerID string) Worker {
 func (e *Engine) CleanupExpiredAssignments() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.cleanupExpiredAssignments(time.Now())
+	now := time.Now()
+	e.cleanupExpiredAssignments(now)
+	e.cleanupExpiredWorkersLocked(now)
 }
 
 func (e *Engine) StatsSnapshot() Stats {
@@ -359,7 +403,7 @@ func (e *Engine) StatsSnapshot() Stats {
 
 	pendingPayments := 0
 	for _, p := range e.paymentEvents {
-		if p.Status == "pending_x402_transfer" || p.Status == "retry" {
+		if p.Status == paymentStatusPending || p.Status == paymentStatusRetry || p.Status == paymentStatusProcessing {
 			pendingPayments++
 		}
 	}
@@ -425,15 +469,15 @@ func (e *Engine) WorkflowJobSnapshots(workflowID string) []JobRuntimeSnapshot {
 	return out
 }
 
-func (e *Engine) ProcessPayments() int {
+func (e *Engine) ProcessPayments(persistIntermediate func([]PaymentEvent) error) (int, error) {
 	e.mu.Lock()
 	if e.processingPayments {
 		e.mu.Unlock()
-		return 0
+		return 0, nil
 	}
 	if e.paymentClient == nil {
 		e.mu.Unlock()
-		return 0
+		return 0, nil
 	}
 	e.processingPayments = true
 
@@ -441,21 +485,55 @@ func (e *Engine) ProcessPayments() int {
 		index int
 		id    string
 		event PaymentEvent
+		prev  PaymentEvent
 	}
 	items := make([]workItem, 0)
+	startedAt := time.Now().UTC().Format(time.RFC3339)
 	for i := range e.paymentEvents {
 		event := &e.paymentEvents[i]
-		if event.Status != "pending_x402_transfer" && event.Status != "retry" {
+		if event.Status != paymentStatusPending && event.Status != paymentStatusRetry {
 			continue
 		}
 		items = append(items, workItem{
 			index: i,
 			id:    event.ID,
 			event: *event,
+			prev:  *event,
 		})
+		event.Status = paymentStatusProcessing
+		event.UpdatedAt = startedAt
+		event.LastError = ""
 	}
 	client := e.paymentClient
+	snapshot := make([]PaymentEvent, len(e.paymentEvents))
+	copy(snapshot, e.paymentEvents)
 	e.mu.Unlock()
+
+	if len(items) == 0 {
+		e.mu.Lock()
+		e.processingPayments = false
+		e.mu.Unlock()
+		return 0, nil
+	}
+
+	if persistIntermediate != nil {
+		if err := persistIntermediate(snapshot); err != nil {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			for _, item := range items {
+				if item.index < 0 || item.index >= len(e.paymentEvents) {
+					continue
+				}
+				event := &e.paymentEvents[item.index]
+				if event.ID != item.id || event.Status != paymentStatusProcessing {
+					continue
+				}
+				*event = item.prev
+			}
+			e.processingPayments = false
+			return 0, err
+		}
+	}
 
 	type paymentResult struct {
 		index   int
@@ -489,18 +567,18 @@ func (e *Engine) ProcessPayments() int {
 		if event.ID != result.id {
 			continue
 		}
-		if event.Status != "pending_x402_transfer" && event.Status != "retry" {
+		if event.Status != paymentStatusProcessing {
 			continue
 		}
 		event.Attempts++
 		event.UpdatedAt = finishedAt
 		if result.err != nil {
-			event.Status = "retry"
+			event.Status = paymentStatusRetry
 			event.LastError = result.err.Error()
 			continue
 		}
 
-		event.Status = "confirmed"
+		event.Status = paymentStatusConfirmed
 		event.LastError = ""
 		event.TxHash = result.receipt.TxHash
 		event.Network = result.receipt.Network
@@ -508,7 +586,7 @@ func (e *Engine) ProcessPayments() int {
 		processed++
 	}
 
-	return processed
+	return processed, nil
 }
 
 func (e *Engine) buildDecision(state *jobState) Decision {
@@ -529,6 +607,14 @@ func (e *Engine) cleanupExpiredAssignments(now time.Time) {
 			if now.Sub(ts) > e.cfg.AssignmentTTL {
 				delete(state.assignments, workerID)
 			}
+		}
+	}
+}
+
+func (e *Engine) cleanupExpiredWorkersLocked(now time.Time) {
+	for workerID, worker := range e.workers {
+		if now.Sub(worker.LastHeartbeat) > e.cfg.AssignmentTTL {
+			delete(e.workers, workerID)
 		}
 	}
 }
@@ -619,7 +705,7 @@ func (e *Engine) appendMissingPaymentEventsLocked(job Job, acceptedSig string, w
 			AmountUSDC:   job.RewardUSDC,
 			WorkerID:     workerID,
 			AcceptedHash: acceptedSig,
-			Status:       "pending_x402_transfer",
+			Status:       paymentStatusPending,
 			UpdatedAt:    now,
 		})
 	}

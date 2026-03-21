@@ -161,3 +161,61 @@ func loadPaymentsProcessInterval() time.Duration {
 	log.Printf("payments process interval: %s", interval)
 	return interval
 }
+
+func loadWorkerJWTSecret() string {
+	return strings.TrimSpace(os.Getenv("WORKER_JWT_SECRET"))
+}
+
+func loadWorkerJWTTTL() time.Duration {
+	const defaultTTL = 12 * time.Hour
+
+	raw := strings.TrimSpace(os.Getenv("WORKER_JWT_TTL_SECONDS"))
+	if raw == "" {
+		log.Printf("worker jwt ttl: %s (default)", defaultTTL)
+		return defaultTTL
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Printf("invalid WORKER_JWT_TTL_SECONDS=%q, using %s", raw, defaultTTL)
+		return defaultTTL
+	}
+
+	ttl := time.Duration(n) * time.Second
+	log.Printf("worker jwt ttl: %s", ttl)
+	return ttl
+}
+
+func loadWorkerAuthChallengeTTL() time.Duration {
+	const defaultTTL = 5 * time.Minute
+
+	raw := strings.TrimSpace(os.Getenv("WORKER_AUTH_CHALLENGE_TTL_SECONDS"))
+	if raw == "" {
+		log.Printf("worker auth challenge ttl: %s (default)", defaultTTL)
+		return defaultTTL
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Printf("invalid WORKER_AUTH_CHALLENGE_TTL_SECONDS=%q, using %s", raw, defaultTTL)
+		return defaultTTL
+	}
+
+	ttl := time.Duration(n) * time.Second
+	log.Printf("worker auth challenge ttl: %s", ttl)
+	return ttl
+}
+
+func loadWorkerAuthDisabled() bool {
+	raw := strings.TrimSpace(os.Getenv("WORKER_AUTH_DISABLED"))
+	switch strings.ToLower(raw) {
+	case "", "0", "false", "no", "off":
+		return false
+	case "1", "true", "yes", "on":
+		log.Printf("worker auth disabled by WORKER_AUTH_DISABLED=%q", raw)
+		return true
+	default:
+		log.Printf("invalid WORKER_AUTH_DISABLED=%q, keeping worker auth enabled", raw)
+		return false
+	}
+}
