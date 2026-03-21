@@ -1,5 +1,18 @@
 export type JsonObject = Record<string, unknown>;
 
+export type WorkerAuthChallenge = {
+  worker_id: string;
+  nonce: string;
+  message: string;
+  expires_at: string;
+};
+
+export type WorkerAuthSession = {
+  worker_id: string;
+  token: string;
+  expires_at: string;
+};
+
 export type DependencyRef = {
   workflow_id: string;
   node_id: string;
@@ -92,27 +105,141 @@ export type WorkflowNodeOutputChunk = {
   value?: unknown;
 };
 
-export async function registerWorker(workerID: string): Promise<unknown> {
-  const response = await fetch("/api/workers/register", {
+const workerAuthStorageKey = "x402.workerAuthSession";
+
+let cachedWorkerAuthSession: WorkerAuthSession | null = loadWorkerAuthSessionFromStorage();
+
+function loadWorkerAuthSessionFromStorage(): WorkerAuthSession | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const raw = window.localStorage.getItem(workerAuthStorageKey);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<WorkerAuthSession>;
+    if (
+      typeof parsed.worker_id !== "string" ||
+      typeof parsed.token !== "string" ||
+      typeof parsed.expires_at !== "string"
+    ) {
+      window.localStorage.removeItem(workerAuthStorageKey);
+      return null;
+    }
+
+    const expiresAt = new Date(parsed.expires_at);
+    if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
+      window.localStorage.removeItem(workerAuthStorageKey);
+      return null;
+    }
+
+    return {
+      worker_id: parsed.worker_id,
+      token: parsed.token,
+      expires_at: parsed.expires_at,
+    };
+  } catch {
+    window.localStorage.removeItem(workerAuthStorageKey);
+    return null;
+  }
+}
+
+function authHeaders(extraHeaders?: HeadersInit): HeadersInit {
+  const headers = new Headers(extraHeaders);
+  if (cachedWorkerAuthSession?.token) {
+    headers.set("Authorization", `Bearer ${cachedWorkerAuthSession.token}`);
+  }
+  return headers;
+}
+
+export function getWorkerAuthSession(): WorkerAuthSession | null {
+  cachedWorkerAuthSession = loadWorkerAuthSessionFromStorage();
+  return cachedWorkerAuthSession;
+}
+
+export function persistWorkerAuthSession(session: WorkerAuthSession | null): void {
+  cachedWorkerAuthSession = session;
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (!session) {
+    window.localStorage.removeItem(workerAuthStorageKey);
+    return;
+  }
+  window.localStorage.setItem(workerAuthStorageKey, JSON.stringify(session));
+}
+
+export function clearWorkerAuthSession(): void {
+  persistWorkerAuthSession(null);
+}
+
+export async function requestWorkerAuthChallenge(workerID: string): Promise<WorkerAuthChallenge> {
+  const response = await fetch("/api/auth/challenge", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ worker_id: workerID }),
   });
 
   if (!response.ok) {
-    throw new Error(`register failed: ${response.status}`);
+    const message = await response.text();
+    throw new Error(`auth challenge failed: ${response.status} ${message}`);
+  }
+
+  return (await response.json()) as WorkerAuthChallenge;
+}
+
+export async function verifyWorkerAuthChallenge(
+  workerID: string,
+  nonce: string,
+  signature: string,
+): Promise<WorkerAuthSession> {
+  const response = await fetch("/api/auth/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      worker_id: workerID,
+      nonce,
+      signature,
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`auth verify failed: ${response.status} ${message}`);
+  }
+
+  const session = (await response.json()) as WorkerAuthSession;
+  persistWorkerAuthSession(session);
+  return session;
+}
+
+export async function registerWorker(workerID: string): Promise<unknown> {
+  const response = await fetch("/api/workers/register", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ worker_id: workerID }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`register failed: ${response.status} ${message}`);
   }
   return response.json();
 }
 
 export async function pullAssignment(workerID: string): Promise<Assignment | null> {
-  const response = await fetch(`/api/pull?worker_id=${encodeURIComponent(workerID)}`);
+  const response = await fetch(`/api/pull?worker_id=${encodeURIComponent(workerID)}`, {
+    headers: authHeaders(),
+  });
 
   if (response.status === 204) {
     return null;
   }
   if (!response.ok) {
-    throw new Error(`pull failed: ${response.status}`);
+    const message = await response.text();
+    throw new Error(`pull failed: ${response.status} ${message}`);
   }
   return (await response.json()) as Assignment;
 }
@@ -159,7 +286,7 @@ export async function submitResult(
 ): Promise<Decision> {
   const response = await fetch("/api/result", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       job_id: jobID,
       worker_id: workerID,
@@ -189,9 +316,12 @@ export async function fetchPayments(workerID?: string): Promise<PaymentEvent[]> 
     qs.set("worker_id", workerID.trim());
   }
   const suffix = qs.toString();
-  const response = await fetch(`/api/payments${suffix ? `?${suffix}` : ""}`);
+  const response = await fetch(`/api/payments${suffix ? `?${suffix}` : ""}`, {
+    headers: authHeaders(),
+  });
   if (!response.ok) {
-    throw new Error(`payments failed: ${response.status}`);
+    const message = await response.text();
+    throw new Error(`payments failed: ${response.status} ${message}`);
   }
   return (await response.json()) as PaymentEvent[];
 }

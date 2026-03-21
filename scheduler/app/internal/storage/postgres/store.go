@@ -47,6 +47,13 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("postgres store is not initialized")
+	}
+	return s.db.PingContext(ctx)
+}
+
 func (s *Store) Migrate(ctx context.Context) error {
 	stmts := []string{
 		`
@@ -372,7 +379,7 @@ func (s *Store) ListPaymentEvents(ctx context.Context, workerID string) ([]sched
 
 func (s *Store) ListPendingPaymentEvents(ctx context.Context) ([]scheduler.PaymentEvent, error) {
 	const q = listPaymentEventsSelect + `
-	WHERE status = 'pending_x402_transfer' OR status = 'retry'
+	WHERE status = 'pending_x402_transfer' OR status = 'retry' OR status = 'processing_x402_transfer'
 	ORDER BY updated_at ASC, created_at ASC
 	`
 	rows, err := s.db.QueryContext(ctx, q)

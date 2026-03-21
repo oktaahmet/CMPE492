@@ -38,24 +38,20 @@ const (
 )
 
 type workflowRuntime struct {
-	spec             WorkflowSpec
-	nodesByID        map[string]WorkflowNode
-	topo             []string
-	completed        map[string]bool
-	completedOutputs map[string]map[string]any
-	enqueued         map[string]bool
-}
-
-type jobRef struct {
-	workflowID string
-	nodeID     string
+	spec        WorkflowSpec
+	nodesByID   map[string]WorkflowNode
+	topo        []string
+	outputs     map[string]map[string]any
+	enqueued    map[string]bool
+	pendingDeps map[string]int
+	dependents  map[string][]string
 }
 
 type WorkflowManager struct {
 	mu        sync.Mutex
 	mode      TopologyMode
-	workflows map[string]*workflowRuntime
-	jobToNode map[string]jobRef
+	runtime   *workflowRuntime
+	jobToNode map[string]string
 }
 
 type WorkflowNodeSnapshot struct {
@@ -77,8 +73,7 @@ type WorkflowRuntimeSnapshot struct {
 func NewWorkflowManager() *WorkflowManager {
 	return &WorkflowManager{
 		mode:      TopologyModePlain,
-		workflows: make(map[string]*workflowRuntime),
-		jobToNode: make(map[string]jobRef),
+		jobToNode: make(map[string]string),
 	}
 }
 
@@ -128,33 +123,34 @@ func (m *WorkflowManager) LoadWorkflowWithCompleted(spec WorkflowSpec, completed
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.runtime != nil {
+		return WorkflowLoadResult{}, nil, fmt.Errorf("workflow already exists: %s", m.runtime.spec.ID)
+	}
+
 	normalized, nodesByID, topo, err := normalizeAndValidateWorkflow(spec, m.mode)
 	if err != nil {
 		return WorkflowLoadResult{}, nil, err
 	}
 
-	if _, exists := m.workflows[normalized.ID]; exists {
-		return WorkflowLoadResult{}, nil, fmt.Errorf("workflow already exists: %s", normalized.ID)
-	}
-
 	runtime := &workflowRuntime{
-		spec:             normalized,
-		nodesByID:        nodesByID,
-		topo:             topo,
-		completed:        map[string]bool{},
-		completedOutputs: map[string]map[string]any{},
-		enqueued:         map[string]bool{},
+		spec:        normalized,
+		nodesByID:   nodesByID,
+		topo:        topo,
+		outputs:     map[string]map[string]any{},
+		enqueued:    map[string]bool{},
+		pendingDeps: map[string]int{},
+		dependents:  map[string][]string{},
 	}
+	initializeWorkflowRuntime(runtime)
 
 	for nodeID, output := range completed {
 		if _, exists := runtime.nodesByID[nodeID]; !exists {
 			continue
 		}
-		runtime.completed[nodeID] = true
-		runtime.completedOutputs[nodeID] = cloneJSONMap(output)
+		markNodeCompletedLocked(runtime, nodeID, output)
 	}
 
-	ready := readyNodesLocked(runtime)
+	ready := readyNodesLocked(runtime, runtime.topo, m.mode)
 	jobs := make([]Job, 0, len(ready))
 	jobIDs := make([]string, 0, len(ready))
 	for _, nodeID := range ready {
@@ -163,10 +159,9 @@ func (m *WorkflowManager) LoadWorkflowWithCompleted(spec WorkflowSpec, completed
 		jobs = append(jobs, job)
 		jobIDs = append(jobIDs, job.ID)
 		runtime.enqueued[nodeID] = true
-		m.jobToNode[job.ID] = jobRef{workflowID: normalized.ID, nodeID: nodeID}
+		m.jobToNode[job.ID] = nodeID
 	}
-
-	m.workflows[normalized.ID] = runtime
+	m.runtime = runtime
 
 	return WorkflowLoadResult{
 		WorkflowID:       normalized.ID,
@@ -176,36 +171,27 @@ func (m *WorkflowManager) LoadWorkflowWithCompleted(spec WorkflowSpec, completed
 	}, jobs, nil
 }
 
-func (m *WorkflowManager) DeleteWorkflow(workflowID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.deleteWorkflowLocked(workflowID)
-}
-
-func (m *WorkflowManager) HasWorkflow(workflowID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.workflows[workflowID]
-	return ok
-}
-
-func (m *WorkflowManager) WorkflowIDs() []string {
+func (m *WorkflowManager) ActiveWorkflowID() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	ids := make([]string, 0, len(m.workflows))
-	for id := range m.workflows {
-		ids = append(ids, id)
+	if m.runtime == nil {
+		return ""
 	}
-	sort.Strings(ids)
-	return ids
+	return m.runtime.spec.ID
 }
 
-func (m *WorkflowManager) Snapshot(workflowID string) (WorkflowRuntimeSnapshot, bool) {
+func (m *WorkflowManager) ClearWorkflow() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.runtime = nil
+	m.jobToNode = make(map[string]string)
+}
 
-	runtime := m.workflows[workflowID]
+func (m *WorkflowManager) Snapshot() (WorkflowRuntimeSnapshot, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	runtime := m.runtime
 	if runtime == nil {
 		return WorkflowRuntimeSnapshot{}, false
 	}
@@ -219,7 +205,7 @@ func (m *WorkflowManager) Snapshot(workflowID string) (WorkflowRuntimeSnapshot, 
 			Priority:   node.Priority,
 			WasmURL:    node.WasmURL,
 			RewardUSDC: node.RewardUSDC,
-			Completed:  runtime.completed[nodeID],
+			Completed:  isNodeCompleted(runtime, nodeID),
 			Enqueued:   runtime.enqueued[nodeID],
 		})
 	}
@@ -235,21 +221,20 @@ func (m *WorkflowManager) OnJobFinalized(jobID string, output map[string]any) ([
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	ref, ok := m.jobToNode[jobID]
+	nodeID, ok := m.jobToNode[jobID]
 	if !ok {
 		return nil, nil
 	}
-	runtime := m.workflows[ref.workflowID]
+	runtime := m.runtime
 	if runtime == nil {
 		delete(m.jobToNode, jobID)
 		return nil, nil
 	}
 
-	runtime.completed[ref.nodeID] = true
-	runtime.completedOutputs[ref.nodeID] = cloneJSONMap(output)
+	markNodeCompletedLocked(runtime, nodeID, output)
 	delete(m.jobToNode, jobID)
 
-	ready := readyNodesLocked(runtime)
+	ready := readyNodesLocked(runtime, runtime.dependents[nodeID], m.mode)
 	if len(ready) == 0 {
 		return nil, nil
 	}
@@ -260,48 +245,57 @@ func (m *WorkflowManager) OnJobFinalized(jobID string, output map[string]any) ([
 		job := jobFromNode(runtime, node)
 		nextJobs = append(nextJobs, job)
 		runtime.enqueued[nodeID] = true
-		m.jobToNode[job.ID] = jobRef{
-			workflowID: runtime.spec.ID,
-			nodeID:     nodeID,
-		}
+		m.jobToNode[job.ID] = nodeID
 	}
 
 	return nextJobs, nil
 }
 
-func (m *WorkflowManager) deleteWorkflowLocked(workflowID string) {
-	delete(m.workflows, workflowID)
-	for jobID, ref := range m.jobToNode {
-		if ref.workflowID == workflowID {
-			delete(m.jobToNode, jobID)
+func initializeWorkflowRuntime(runtime *workflowRuntime) {
+	for _, nodeID := range runtime.topo {
+		node := runtime.nodesByID[nodeID]
+		runtime.pendingDeps[nodeID] = len(node.DependsOn)
+		if _, exists := runtime.dependents[nodeID]; !exists {
+			runtime.dependents[nodeID] = nil
+		}
+		for _, depID := range node.DependsOn {
+			runtime.dependents[depID] = append(runtime.dependents[depID], nodeID)
 		}
 	}
 }
 
-func readyNodesLocked(runtime *workflowRuntime) []string {
-	ready := make([]string, 0)
-	for _, nodeID := range runtime.topo {
-		if runtime.enqueued[nodeID] || runtime.completed[nodeID] {
-			continue
-		}
-		node := runtime.nodesByID[nodeID]
-		allDepsDone := true
-		for _, dep := range node.DependsOn {
-			if !runtime.completed[dep] {
-				allDepsDone = false
-				break
-			}
-		}
-		if allDepsDone {
-			ready = append(ready, nodeID)
+func markNodeCompletedLocked(runtime *workflowRuntime, nodeID string, output map[string]any) {
+	if isNodeCompleted(runtime, nodeID) {
+		return
+	}
+
+	runtime.outputs[nodeID] = cloneJSONMap(output)
+
+	for _, childID := range runtime.dependents[nodeID] {
+		if runtime.pendingDeps[childID] > 0 {
+			runtime.pendingDeps[childID]--
 		}
 	}
+}
+
+func readyNodesLocked(runtime *workflowRuntime, candidateIDs []string, mode TopologyMode) []string {
+	ready := make([]string, 0, len(candidateIDs))
+	for _, nodeID := range candidateIDs {
+		if runtime.enqueued[nodeID] || isNodeCompleted(runtime, nodeID) {
+			continue
+		}
+		if runtime.pendingDeps[nodeID] != 0 {
+			continue
+		}
+		ready = append(ready, nodeID)
+	}
+	sortReadyNodeIDs(ready, runtime.nodesByID, mode)
 	return ready
 }
 
 func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 	args := append([]any(nil), node.Args...)
-	args = appendDependencyScalarArgs(args, runtime.completedOutputs, node.DependsOn)
+	args = appendDependencyScalarArgs(args, runtime.outputs, node.DependsOn)
 
 	deps := make([]DependencyRef, 0, len(node.DependsOn))
 	for _, depID := range node.DependsOn {
@@ -321,6 +315,14 @@ func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 		ResultSchema: node.ResultSchema,
 		RewardUSDC:   node.RewardUSDC,
 	}
+}
+
+func isNodeCompleted(runtime *workflowRuntime, nodeID string) bool {
+	if runtime == nil {
+		return false
+	}
+	_, exists := runtime.outputs[nodeID]
+	return exists
 }
 
 func appendDependencyScalarArgs(
@@ -492,7 +494,7 @@ func topologicalSort(nodesByID map[string]WorkflowNode, mode TopologyMode) ([]st
 
 func sortReadyNodeIDs(ids []string, nodesByID map[string]WorkflowNode, mode TopologyMode) {
 	sort.Slice(ids, func(i, j int) bool {
-		if NormalizeTopologyMode(string(mode)) != TopologyModePriorityAware {
+		if mode != TopologyModePriorityAware {
 			return ids[i] < ids[j]
 		}
 		left := nodesByID[ids[i]]

@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, Play, Square, Wallet, Waves, ClipboardList, Network } from "lucide-react";
+import { Activity, ClipboardList, Network, Play, Square, Wallet, Waves } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchStats, registerWorker } from "./lib/api";
+import {
+  clearWorkerAuthSession,
+  fetchStats,
+  getWorkerAuthSession,
+  registerWorker,
+  requestWorkerAuthChallenge,
+  type WorkerAuthSession,
+  verifyWorkerAuthChallenge,
+} from "./lib/api";
 import { LiveRuntimePage } from "./components/live-runtime-page";
 import { PaymentsHistoryPage } from "./components/payments-history-page";
 import { runWorkerOnce } from "./lib/worker-loop";
@@ -24,6 +27,11 @@ type EIP1193Provider = {
   isCoinbaseWallet?: boolean;
   providers?: EIP1193Provider[];
   request: (args: EIP1193RequestArgs) => Promise<unknown>;
+};
+
+type EIP1193ProviderWithEvents = EIP1193Provider & {
+  on?: (eventName: string, listener: (...args: unknown[]) => void) => void;
+  removeListener?: (eventName: string, listener: (...args: unknown[]) => void) => void;
 };
 
 type EIP6963ProviderDetail = {
@@ -49,7 +57,63 @@ function safeStringify(value: unknown): string {
   }
 }
 
+function isWalletAddress(value: string): boolean {
+  return value.startsWith("0x") && value.length >= 42;
+}
+
+function isAuthorizationError(error: unknown): boolean {
+  const text = String(error);
+  return text.includes("401") || text.includes("403");
+}
+
+function isAutoWorkerMode(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return new URLSearchParams(window.location.search).get("auto_worker") === "1";
+}
+
+function generateRandomWorkerAddress(): string {
+  const bytes = new Uint8Array(20);
+  crypto.getRandomValues(bytes);
+  let out = "0x";
+  for (const value of bytes) {
+    out += value.toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
+async function signWalletMessage(
+  provider: EIP1193Provider,
+  walletAddress: string,
+  message: string,
+): Promise<string> {
+  try {
+    const signature = await provider.request({
+      method: "personal_sign",
+      params: [message, walletAddress],
+    });
+    if (typeof signature === "string" && signature.length > 0) {
+      return signature;
+    }
+  } catch {
+    const fallbackSignature = await provider.request({
+      method: "personal_sign",
+      params: [walletAddress, message],
+    });
+    if (typeof fallbackSignature === "string" && fallbackSignature.length > 0) {
+      return fallbackSignature;
+    }
+  }
+
+  throw new Error("wallet signature missing");
+}
+
 export default function App() {
+  const autoWorkerModeRef = useRef(isAutoWorkerMode());
+  const autoWorkerMode = autoWorkerModeRef.current;
+  const initialAuthSessionRef = useRef<WorkerAuthSession | null>(getWorkerAuthSession());
+  const initialAuthSession = initialAuthSessionRef.current;
   const [route, setRoute] = useState<"worker" | "payments" | "runtime">(() => {
     if (window.location.hash === "#/payments") return "payments";
     if (window.location.hash === "#/runtime") return "runtime";
@@ -57,17 +121,19 @@ export default function App() {
   });
   const [assignmentText, setAssignmentText] = useState("");
   const [logText, setLogText] = useState("");
-  const [workerId, setWorkerId] = useState("");
+  const [workerId, setWorkerId] = useState(initialAuthSession?.worker_id ?? "");
+  const [authSession, setAuthSession] = useState<WorkerAuthSession | null>(initialAuthSession);
   const [status, setStatus] = useState("idle");
-  const [walletStatus, setWalletStatus] = useState("wallet: disconnected");
+  const [walletStatus, setWalletStatus] = useState(
+    initialAuthSession ? `wallet: verified ${initialAuthSession.worker_id}` : "wallet: disconnected",
+  );
 
   const wasmWorkerRef = useRef<Worker | null>(null);
-  const workerIdRef = useRef("");
+  const workerIdRef = useRef(initialAuthSession?.worker_id ?? "");
   const runningRef = useRef(false);
   const loopTimerRef = useRef<number | undefined>(undefined);
   const heartbeatTimerRef = useRef<number | undefined>(undefined);
   const discoveredProviderRef = useRef<EIP1193Provider | null>(null);
-  const autoWorkerStartedRef = useRef(false);
 
   const log = useCallback((message: string, obj?: unknown) => {
     const line = obj === undefined ? message : `${message} ${safeStringify(obj)}`;
@@ -75,7 +141,10 @@ export default function App() {
   }, []);
 
   const walletAddress = () => workerIdRef.current.trim();
-  const isWalletAddressValid = walletAddress().startsWith("0x") && walletAddress().length >= 42;
+  const isWalletAddressValid = isWalletAddress(walletAddress());
+  const isAutoWorkerReady = autoWorkerMode && isWalletAddressValid;
+  const isWalletVerified =
+    authSession !== null && authSession.worker_id.toLowerCase() === walletAddress().toLowerCase();
 
   const statusBadgeVariant = () => {
     switch (status) {
@@ -89,6 +158,19 @@ export default function App() {
         return "secondary" as const;
     }
   };
+
+  const clearAuthState = useCallback((nextStatus?: string) => {
+    clearWorkerAuthSession();
+    setAuthSession(null);
+    setWalletStatus(nextStatus ?? (workerIdRef.current ? `wallet: not verified ${workerIdRef.current}` : "wallet: disconnected"));
+  }, []);
+
+  const applyAuthSession = useCallback((session: WorkerAuthSession) => {
+    setAuthSession(session);
+    workerIdRef.current = session.worker_id;
+    setWorkerId(session.worker_id);
+    setWalletStatus(`wallet: verified ${session.worker_id}`);
+  }, []);
 
   const navigate = (next: "worker" | "payments" | "runtime") => {
     if (next === "payments") {
@@ -120,6 +202,15 @@ export default function App() {
     return null;
   };
 
+  const resetWasmWorker = useCallback((reason: string) => {
+    if (!wasmWorkerRef.current) {
+      return;
+    }
+    wasmWorkerRef.current.terminate();
+    wasmWorkerRef.current = null;
+    log("WASM worker reset", { reason });
+  }, [log]);
+
   const ensureWasmWorker = () => {
     if (wasmWorkerRef.current) {
       return wasmWorkerRef.current;
@@ -129,21 +220,31 @@ export default function App() {
     return wasmWorkerRef.current;
   };
 
-  const setWorkerIdentity = (nextWorkerID: string, nextStatus?: string) => {
-    workerIdRef.current = nextWorkerID;
-    setWorkerId(nextWorkerID);
-    if (nextStatus) {
-      setWalletStatus(nextStatus);
+  const stopWorking = useCallback(() => {
+    runningRef.current = false;
+    setStatus("stopped");
+
+    if (loopTimerRef.current !== undefined) {
+      window.clearTimeout(loopTimerRef.current);
+      loopTimerRef.current = undefined;
     }
-  };
+    if (heartbeatTimerRef.current !== undefined) {
+      window.clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = undefined;
+    }
 
-  const createRandomWorkerAddress = () => {
-    const bytes = new Uint8Array(20);
-    crypto.getRandomValues(bytes);
-    return `0x${Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")}`;
-  };
+    resetWasmWorker("stop");
+  }, [resetWasmWorker]);
 
-  const workLoop = async () => {
+  const handleWorkerAuthFailure = useCallback((message: string, error: unknown) => {
+    log(message, { error: String(error) });
+    if (isAuthorizationError(error)) {
+      stopWorking();
+      clearAuthState("wallet: session expired, reconnect required");
+    }
+  }, [clearAuthState, log, stopWorking]);
+
+  const workLoop = useCallback(async () => {
     if (!runningRef.current) {
       return;
     }
@@ -153,11 +254,12 @@ export default function App() {
       await runWorkerOnce({
         workerID: walletAddress(),
         ensureWasmWorker,
+        resetWasmWorker,
         log,
         setAssignmentText,
       });
     } catch (error) {
-      log("Worker loop error", { error: String(error) });
+      handleWorkerAuthFailure("Worker loop error", error);
       setStatus("error");
     } finally {
       if (runningRef.current) {
@@ -166,7 +268,7 @@ export default function App() {
         }, 1800);
       }
     }
-  };
+  }, [ensureWasmWorker, handleWorkerAuthFailure, log, resetWasmWorker]);
 
   const connectWallet = async () => {
     log("Connect button clicked");
@@ -179,7 +281,7 @@ export default function App() {
     if (!provider) {
       log("No wallet extension found", {
         ethereum: Boolean(window.ethereum),
-        coinbaseWalletExtension: Boolean(window.coinbaseWalletExtension),
+        coinbase_wallet_extension: Boolean(window.coinbaseWalletExtension),
         eip6963_discovered: Boolean(discoveredProviderRef.current),
       });
       return;
@@ -187,17 +289,29 @@ export default function App() {
 
     try {
       const accounts = await provider.request({ method: "eth_requestAccounts" });
-      if (Array.isArray(accounts) && accounts.length > 0 && typeof accounts[0] === "string") {
-        setWorkerIdentity(accounts[0], `wallet: ${accounts[0]}`);
-        log("Wallet connected", { address: accounts[0] });
+      if (!Array.isArray(accounts) || accounts.length === 0 || typeof accounts[0] !== "string") {
+        throw new Error("wallet account missing");
       }
+
+      const nextWorkerID = accounts[0].trim();
+      workerIdRef.current = nextWorkerID;
+      setWorkerId(nextWorkerID);
+      clearAuthState(`wallet: signature requested ${nextWorkerID}`);
+
+      const challenge = await requestWorkerAuthChallenge(nextWorkerID);
+      const signature = await signWalletMessage(provider, nextWorkerID, challenge.message);
+      const session = await verifyWorkerAuthChallenge(nextWorkerID, challenge.nonce, signature);
+      applyAuthSession(session);
+      log("Wallet connected and verified", { address: session.worker_id, expires_at: session.expires_at });
     } catch (error) {
+      const currentWorkerID = workerIdRef.current;
+      clearAuthState(currentWorkerID ? `wallet: verification failed ${currentWorkerID}` : "wallet: disconnected");
       log("Wallet connect failed", { error: String(error) });
     }
   };
 
-  const startWorking = () => {
-    if (runningRef.current) {
+  const startWorking = useCallback(() => {
+    if (runningRef.current || !isWalletAddressValid || (!isWalletVerified && !isAutoWorkerReady)) {
       return;
     }
 
@@ -206,37 +320,43 @@ export default function App() {
 
     heartbeatTimerRef.current = window.setInterval(() => {
       void registerWorker(walletAddress()).catch((error) => {
-        log("Heartbeat failed", { error: String(error) });
+        handleWorkerAuthFailure("Heartbeat failed", error);
       });
     }, 15000);
 
     void workLoop();
-  };
-
-  const startRandomWorker = () => {
-    const nextWorkerID = createRandomWorkerAddress();
-    setWorkerIdentity(nextWorkerID, `test worker: ${nextWorkerID}`);
-    log("Random test worker generated", { address: nextWorkerID });
-    startWorking();
-  };
-
-  const stopWorking = () => {
-    runningRef.current = false;
-    setStatus("stopped");
-
-    if (loopTimerRef.current !== undefined) {
-      window.clearTimeout(loopTimerRef.current);
-      loopTimerRef.current = undefined;
-    }
-    if (heartbeatTimerRef.current !== undefined) {
-      window.clearInterval(heartbeatTimerRef.current);
-      heartbeatTimerRef.current = undefined;
-    }
-  };
+  }, [handleWorkerAuthFailure, isAutoWorkerReady, isWalletAddressValid, isWalletVerified, workLoop]);
 
   useEffect(() => {
     workerIdRef.current = workerId;
   }, [workerId]);
+
+  useEffect(() => {
+    if (!autoWorkerMode) {
+      return;
+    }
+
+    const nextWorkerID = generateRandomWorkerAddress();
+    clearWorkerAuthSession();
+    setAuthSession(null);
+    workerIdRef.current = nextWorkerID;
+    setWorkerId(nextWorkerID);
+    setWalletStatus(`wallet: auto worker ${nextWorkerID}`);
+    log("Auto worker mode enabled", { worker_id: nextWorkerID });
+  }, [autoWorkerMode, log]);
+
+  useEffect(() => {
+    if (!autoWorkerMode || runningRef.current || !isWalletAddressValid) {
+      return;
+    }
+
+    const timerID = window.setTimeout(() => {
+      startWorking();
+    }, 150);
+    return () => {
+      window.clearTimeout(timerID);
+    };
+  }, [autoWorkerMode, isWalletAddressValid, startWorking, workerId]);
 
   useEffect(() => {
     const onAnnounceProvider = (event: Event) => {
@@ -266,32 +386,37 @@ export default function App() {
     log("UI initialized", {
       ethereum_injected: Boolean(window.ethereum),
       coinbase_wallet_extension: Boolean(window.coinbaseWalletExtension),
+      worker_auth_restored: Boolean(initialAuthSession),
     });
 
+    const provider = detectProvider() as EIP1193ProviderWithEvents | null;
+    const onAccountsChanged = (...args: unknown[]) => {
+      const accountList = Array.isArray(args[0]) ? args[0] : [];
+      const nextAccount = typeof accountList[0] === "string" ? accountList[0].trim() : "";
+      if (!nextAccount) {
+        stopWorking();
+        workerIdRef.current = "";
+        setWorkerId("");
+        clearAuthState("wallet: disconnected");
+        return;
+      }
+      if (!sameWorkerAddress(nextAccount, workerIdRef.current)) {
+        stopWorking();
+        workerIdRef.current = nextAccount;
+        setWorkerId(nextAccount);
+        clearAuthState(`wallet: account changed ${nextAccount}`);
+      }
+    };
+
+    provider?.on?.("accountsChanged", onAccountsChanged);
+
     return () => {
+      provider?.removeListener?.("accountsChanged", onAccountsChanged);
       window.removeEventListener("eip6963:announceProvider", onAnnounceProvider);
       stopWorking();
-      wasmWorkerRef.current?.terminate();
-      wasmWorkerRef.current = null;
+      resetWasmWorker("unmount");
     };
-  }, [log]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("auto_worker") !== "1") {
-      return;
-    }
-    if (autoWorkerStartedRef.current || runningRef.current) {
-      return;
-    }
-    autoWorkerStartedRef.current = true;
-    const nextWorkerID = createRandomWorkerAddress();
-    setWorkerIdentity(nextWorkerID, `test worker: ${nextWorkerID}`);
-    log("Auto worker mode enabled", { address: nextWorkerID });
-    window.setTimeout(() => {
-      startWorking();
-    }, 0);
-  }, [log]);
+  }, [clearAuthState, log, resetWasmWorker, stopWorking]);
 
   useEffect(() => {
     const syncRoute = () => {
@@ -370,22 +495,19 @@ export default function App() {
                   <Input
                     id="workerId"
                     value={workerId}
-                    onChange={(event) => setWorkerId(event.target.value)}
+                    readOnly
                     className="font-mono text-xs sm:text-sm"
-                    placeholder="0x..."
+                    placeholder="Connect wallet to verify address ownership"
                   />
                   <div className="flex flex-wrap gap-2">
-                    <Button onClick={() => void connectWallet()} type="button" variant="default">
+                    <Button onClick={() => void connectWallet()} type="button" variant="default" disabled={autoWorkerMode}>
                       Connect Wallet
-                    </Button>
-                    <Button onClick={startRandomWorker} type="button" variant="secondary" disabled={runningRef.current}>
-                      Quick Test Worker
                     </Button>
                     <Button
                       onClick={startWorking}
                       type="button"
                       variant="secondary"
-                      disabled={!isWalletAddressValid || runningRef.current}
+                      disabled={(!isWalletVerified && !isAutoWorkerReady) || runningRef.current}
                     >
                       <Play className="size-4" />
                       Start
@@ -422,11 +544,7 @@ export default function App() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <Textarea
-                    className="min-h-56 font-mono text-xs"
-                    value={assignmentText || "{}"}
-                    readOnly
-                  />
+                  <Textarea className="min-h-56 font-mono text-xs" value={assignmentText || "{}"} readOnly />
                 </CardContent>
               </Card>
             </div>
@@ -444,7 +562,6 @@ export default function App() {
           <PaymentsHistoryPage
             workerId={workerId}
             walletStatus={walletStatus}
-            onWorkerIdChange={setWorkerId}
             onConnectWallet={connectWallet}
           />
         ) : (
@@ -453,4 +570,8 @@ export default function App() {
       </div>
     </main>
   );
+}
+
+function sameWorkerAddress(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
 }

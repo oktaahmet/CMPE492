@@ -269,31 +269,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/payments/process": {
-            "post": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "payments"
-                ],
-                "summary": "Process pending payments",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/main.ProcessPaymentsResponse"
-                        }
-                    },
-                    "405": {
-                        "description": "Method Not Allowed",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
         "/api/pull": {
             "get": {
                 "produces": [
@@ -605,14 +580,6 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "total_items": {
-                    "type": "integer"
-                }
-            }
-        },
-        "main.ProcessPaymentsResponse": {
-            "type": "object",
-            "properties": {
-                "processed_count": {
                     "type": "integer"
                 }
             }

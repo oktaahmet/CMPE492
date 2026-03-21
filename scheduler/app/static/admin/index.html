@@ -100,7 +100,6 @@
           <input id="tokenInput" type="password" placeholder="ADMIN_API_TOKEN" />
           <button id="unlockBtn" type="button">Unlock</button>
         </div>
-        <p class="muted">Token is verified via <code>/api/admin/workflows</code>.</p>
       </div>
 
       <div id="adminPanel">
@@ -249,7 +248,7 @@
         const preferredID = data.active_workflow_id || data.loaded_workflow_id || "";
         setWorkflowOptions(data.uploaded_ids || [], preferredID);
         topologyModeSelect.value = data.topology_mode || "plain";
-        statusLine.textContent = `active=${data.active_workflow_id || "-"} | loaded=${data.loaded_workflow_id || "-"} | mode=${data.topology_mode || "plain"}`;
+        statusLine.textContent = `workflow=${preferredID || "-"} | mode=${data.topology_mode || "plain"}`;
         show(data);
       }
 

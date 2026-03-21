@@ -9,7 +9,6 @@ import { fetchPayments, type PaymentEvent } from "@/lib/api";
 type PaymentsHistoryPageProps = {
   workerId: string;
   walletStatus: string;
-  onWorkerIdChange: (value: string) => void;
   onConnectWallet: () => Promise<void> | void;
 };
 
@@ -42,7 +41,7 @@ function formatDate(input: string): string {
 }
 
 export function PaymentsHistoryPage(props: PaymentsHistoryPageProps) {
-  const { workerId, walletStatus, onWorkerIdChange, onConnectWallet } = props;
+  const { workerId, walletStatus, onConnectWallet } = props;
   const [payments, setPayments] = useState<PaymentEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -105,9 +104,9 @@ export function PaymentsHistoryPage(props: PaymentsHistoryPageProps) {
           <Input
             id="paymentWorkerId"
             value={workerId}
-            onChange={(event) => onWorkerIdChange(event.target.value)}
+            readOnly
             className="font-mono text-xs sm:text-sm"
-            placeholder="0x..."
+            placeholder="Connect wallet to load your payment history"
           />
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{walletStatus}</Badge>

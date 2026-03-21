@@ -22,11 +22,6 @@ definitions:
       total_items:
         type: integer
     type: object
-  main.ProcessPaymentsResponse:
-    properties:
-      processed_count:
-        type: integer
-    type: object
   main.RegisterWorkerRequest:
     properties:
       worker_id:
@@ -361,22 +356,6 @@ paths:
           schema:
             type: string
       summary: List payment queue
-      tags:
-      - payments
-  /api/payments/process:
-    post:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/main.ProcessPaymentsResponse'
-        "405":
-          description: Method Not Allowed
-          schema:
-            type: string
-      summary: Process pending payments
       tags:
       - payments
   /api/pull:

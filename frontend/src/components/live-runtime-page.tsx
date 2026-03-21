@@ -230,13 +230,10 @@ export function LiveRuntimePage() {
           <CardTitle className="flex flex-wrap items-center gap-3 text-base sm:text-lg">
             <span className="flex items-center gap-2">
               <Network className="size-4" />
-              Live Scheduler Runtime
+              Live Scheduler
             </span>
             <Badge variant="outline" className="font-mono text-[11px]">
-              active={runtime?.active_workflow_id || "-"}
-            </Badge>
-            <Badge variant="outline" className="font-mono text-[11px]">
-              loaded={runtime?.loaded_workflow_id || "-"}
+              workflow={runtime?.active_workflow_id || runtime?.loaded_workflow_id || "-"}
             </Badge>
           </CardTitle>
         </CardHeader>
