@@ -401,8 +401,8 @@ func workflowNodeOutputChunkHandler(store *postgres.Store) http.HandlerFunc {
 
 		offset := parsePositiveIntQuery(r.URL.Query().Get("offset"), 0)
 		limit := parsePositiveIntQuery(r.URL.Query().Get("limit"), 256)
-		if limit > 2000 {
-			limit = 2000
+		if limit > 16384 {
+			limit = 16384
 		}
 
 		output, found, err := store.LoadWorkflowNodeOutput(r.Context(), workflowID, nodeID)

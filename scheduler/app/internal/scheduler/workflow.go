@@ -295,7 +295,6 @@ func readyNodesLocked(runtime *workflowRuntime, candidateIDs []string, mode Topo
 
 func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 	args := append([]any(nil), node.Args...)
-	args = appendDependencyScalarArgs(args, runtime.outputs, node.DependsOn)
 
 	deps := make([]DependencyRef, 0, len(node.DependsOn))
 	for _, depID := range node.DependsOn {
@@ -323,44 +322,6 @@ func isNodeCompleted(runtime *workflowRuntime, nodeID string) bool {
 	}
 	_, exists := runtime.outputs[nodeID]
 	return exists
-}
-
-func appendDependencyScalarArgs(
-	args []any,
-	completedOutputs map[string]map[string]any,
-	dependsOn []string,
-) []any {
-	if len(dependsOn) == 0 {
-		return args
-	}
-
-	out := append([]any(nil), args...)
-	for _, depID := range dependsOn {
-		payload := completedOutputs[depID]
-		if payload == nil {
-			continue
-		}
-		value, exists := payload["output"]
-		if !exists {
-			continue
-		}
-		if isScalarArg(value) {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func isScalarArg(value any) bool {
-	switch value.(type) {
-	case nil, bool, string,
-		float64, float32,
-		int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64:
-		return true
-	default:
-		return false
-	}
 }
 
 func jobID(workflowID, nodeID string) string {

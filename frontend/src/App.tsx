@@ -443,12 +443,12 @@ export default function App() {
       <div className="pointer-events-none absolute -right-20 top-16 h-72 w-72 rounded-full bg-amber-300/20 blur-3xl" />
       <div className="pointer-events-none absolute bottom-8 left-1/2 h-56 w-56 -translate-x-1/2 rounded-full bg-emerald-400/20 blur-3xl" />
 
-      <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-4">
+      <div className={`relative mx-auto flex w-full flex-col gap-4 ${route === "runtime" ? "max-w-[92rem]" : "max-w-6xl"}`}>
         <Card className="border-border/70 bg-card/90 backdrop-blur">
           <CardHeader className="gap-3">
             <CardTitle className="flex items-center gap-2 text-2xl">
               <Waves className="size-5" />
-              X402 Browser Worker Console
+              Browser Worker Interface
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center gap-2">
@@ -551,7 +551,7 @@ export default function App() {
 
             <Card className="border-border/70 bg-card/90 backdrop-blur">
               <CardHeader>
-                <CardTitle className="text-base">Live Log Stream</CardTitle>
+                <CardTitle className="text-base">Logs</CardTitle>
               </CardHeader>
               <CardContent>
                 <Textarea className="min-h-80 font-mono text-xs" value={logText} readOnly />

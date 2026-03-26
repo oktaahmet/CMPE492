@@ -1,0 +1,32 @@
+{
+  "id": "wf-mini-text-demo-008",
+  "nodes": [
+    {
+      "id": "emit-text",
+      "wasm_url": "/example-8/emit_text.wasm?v=1",
+      "args": [
+        {
+          "repeat": 8
+        }
+      ],
+      "result_schema": {
+        "output": { "type": "string", "required": true }
+      },
+      "reward_usdc": "0.05"
+    },
+    {
+      "id": "summarize-text",
+      "depends_on": ["emit-text"],
+      "wasm_url": "/example-8/summarize_text.wasm?v=1",
+      "args": [
+        {
+          "passes": 2
+        }
+      ],
+      "result_schema": {
+        "output": { "type": "string", "required": true }
+      },
+      "reward_usdc": "0.08"
+    }
+  ]
+}
