@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Network, RefreshCw, RadioTower } from "lucide-react";
+import { Network, RefreshCw, RadioTower } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -221,8 +221,6 @@ export function LiveRuntimePage() {
     total_jobs: 0,
   };
 
-  const recentJobs = [...(runtime?.jobs ?? [])].sort((left, right) => left.queue_index - right.queue_index);
-
   return (
     <>
       <Card className="overflow-hidden border-border/70 bg-card/90 backdrop-blur">
@@ -287,7 +285,7 @@ export function LiveRuntimePage() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_0.65fr]">
+      <div className="grid grid-cols-1 gap-4">
         <Card className="overflow-hidden border-border/70 bg-card/90 backdrop-blur">
           <CardHeader>
             <CardTitle className="text-base">Workflow Graph</CardTitle>
@@ -298,7 +296,7 @@ export function LiveRuntimePage() {
                 No active workflow snapshot available.
               </div>
             ) : (
-              <div className="overflow-auto rounded-3xl border border-slate-200/80 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.14),transparent_32%),linear-gradient(180deg,#fcfdff,#f2f7ff)] p-3">
+              <div className="overflow-auto rounded-3xl border border-slate-200/80 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.14),transparent_32%),linear-gradient(180deg,#fcfdff,#f2f7ff)] p-2 md:p-3">
                 <div className="relative" style={{ width: `${graph.width}px`, height: `${graph.height}px` }}>
                   <svg className="absolute inset-0 h-full w-full" viewBox={`0 0 ${graph.width} ${graph.height}`}>
                     {graph.edges.map((edge) => (
@@ -369,47 +367,6 @@ export function LiveRuntimePage() {
                   })}
                 </div>
               </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/70 bg-card/90 backdrop-blur">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Activity className="size-4" />
-              Job Activity
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {recentJobs.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-6 text-sm text-muted-foreground">
-                No runtime jobs yet.
-              </div>
-            ) : (
-              recentJobs.map((job) => (
-                <div key={job.job_id} className="rounded-2xl border border-slate-200 bg-white/80 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="font-medium">{job.node_id}</div>
-                      <div className="font-mono text-[11px] text-muted-foreground">{job.job_id}</div>
-                    </div>
-                    <Badge variant={job.finalized ? "default" : "outline"}>
-                      {job.finalized ? "finalized" : "active"}
-                    </Badge>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                    <span className="rounded-full bg-slate-100 px-2 py-1">
-                      queue #{Math.max(job.queue_index, 0)}
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2 py-1">
-                      accepted {job.accepted_workers}
-                    </span>
-                    <span className="rounded-full bg-slate-100 px-2 py-1">
-                      workers {(job.assigned_workers?.length ?? 0) + (job.submitted_workers?.length ?? 0)}
-                    </span>
-                  </div>
-                </div>
-              ))
             )}
           </CardContent>
         </Card>
