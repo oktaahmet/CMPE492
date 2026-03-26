@@ -1,5 +1,6 @@
 import {
   type Assignment,
+  type DependencyRef,
   fetchWorkflowNodeOutputChunk,
   fetchWorkflowNodeOutput,
   type JsonObject,
@@ -19,6 +20,8 @@ export type WasmWorkerResponse = {
 const WASM_WORKER_TIMEOUT_MS = 45_000;
 const MAX_INLINE_DEP_ARRAY_ITEMS = 10_000;
 const MAX_INLINE_DEP_TEXT_CHARS = 200_000;
+const CHUNKED_DEP_ARRAY_ITEMS = 4_096;
+const CHUNKED_DEP_TEXT_CHARS = 16_384;
 
 type RunOnceDeps = {
   workerID: string;
@@ -30,16 +33,12 @@ type RunOnceDeps = {
 
 type SyntheticMode = "emit_big_array" | "consume_big_array";
 
-type ExecutionDependency = {
-  workflow_id: string;
-  node_id: string;
-  payload: JsonObject;
-};
-
 type ExecutionContext = {
   args: unknown[];
-  dependencies: ExecutionDependency[];
+  inputs: Record<string, JsonObject>;
 };
+
+type DependencyChunkMode = "array" | "string" | "json" | "missing";
 
 function compactValue(value: unknown, depth = 0): unknown {
   if (depth > 2) {
@@ -273,62 +272,147 @@ async function maybeRunSyntheticJob(assignment: Assignment): Promise<WasmWorkerR
   );
 }
 
+async function fetchDependencyPayload(
+  dep: DependencyRef,
+  log: RunOnceDeps["log"],
+): Promise<JsonObject> {
+  const firstChunk = await fetchWorkflowNodeOutputChunk(dep.workflow_id, dep.node_id, 0, 1);
+  if (firstChunk.mode === "missing") {
+    return {};
+  }
+
+  const isLargeArray =
+    firstChunk.mode === "array" && (firstChunk.total_items ?? 0) > MAX_INLINE_DEP_ARRAY_ITEMS;
+  const isLargeText =
+    (firstChunk.mode === "string" || firstChunk.mode === "json") &&
+    (firstChunk.total_chars ?? 0) > MAX_INLINE_DEP_TEXT_CHARS;
+  if (!isLargeArray && !isLargeText) {
+    return fetchWorkflowNodeOutput(dep.workflow_id, dep.node_id);
+  }
+
+  log("Dependency output too large for inline fetch; switching to chunked reassembly", {
+    workflow_id: dep.workflow_id,
+    node_id: dep.node_id,
+    mode: firstChunk.mode,
+    total_items: firstChunk.total_items,
+    total_chars: firstChunk.total_chars,
+  });
+
+  switch (firstChunk.mode) {
+    case "array":
+      return {
+        output: await reassembleArrayDependency(dep.workflow_id, dep.node_id, firstChunk.mode),
+      };
+    case "string":
+      return {
+        output: await reassembleTextDependency(dep.workflow_id, dep.node_id, firstChunk.mode),
+      };
+    case "json":
+      return {
+        output: parseChunkedJSON(
+          await reassembleTextDependency(dep.workflow_id, dep.node_id, firstChunk.mode),
+          dep.workflow_id,
+          dep.node_id,
+        ),
+      };
+    default:
+      throw new Error(`unsupported dependency chunk mode for ${dep.node_id}: ${String(firstChunk.mode)}`);
+  }
+}
+
+async function reassembleArrayDependency(
+  workflowID: string,
+  nodeID: string,
+  expectedMode: Extract<DependencyChunkMode, "array">,
+): Promise<unknown[]> {
+  const items: unknown[] = [];
+  let offset = 0;
+
+  for (;;) {
+    const chunk = await fetchWorkflowNodeOutputChunk(workflowID, nodeID, offset, CHUNKED_DEP_ARRAY_ITEMS);
+    if (chunk.mode !== expectedMode) {
+      throw new Error(
+        `dependency ${nodeID} changed mode during chunk fetch: expected ${expectedMode}, got ${chunk.mode}`,
+      );
+    }
+    if (Array.isArray(chunk.items)) {
+      items.push(...chunk.items);
+    }
+    if (chunk.done) {
+      return items;
+    }
+    offset = typeof chunk.next_offset === "number" ? chunk.next_offset : offset + CHUNKED_DEP_ARRAY_ITEMS;
+  }
+}
+
+async function reassembleTextDependency(
+  workflowID: string,
+  nodeID: string,
+  expectedMode: Extract<DependencyChunkMode, "string" | "json">,
+): Promise<string> {
+  const parts: string[] = [];
+  let offset = 0;
+
+  for (;;) {
+    const chunk = await fetchWorkflowNodeOutputChunk(workflowID, nodeID, offset, CHUNKED_DEP_TEXT_CHARS);
+    if (chunk.mode !== expectedMode) {
+      throw new Error(
+        `dependency ${nodeID} changed mode during chunk fetch: expected ${expectedMode}, got ${chunk.mode}`,
+      );
+    }
+    if (typeof chunk.data === "string" && chunk.data.length > 0) {
+      parts.push(chunk.data);
+    }
+    if (chunk.done) {
+      return parts.join("");
+    }
+    offset = typeof chunk.next_offset === "number" ? chunk.next_offset : offset + CHUNKED_DEP_TEXT_CHARS;
+  }
+}
+
+function parseChunkedJSON(text: string, workflowID: string, nodeID: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `dependency ${workflowID}/${nodeID} chunked json reassembly failed: ${String(error)}`,
+    );
+  }
+}
+
 async function buildExecutionContext(
   assignment: Assignment,
   log: RunOnceDeps["log"],
 ): Promise<ExecutionContext> {
-  const out: unknown[] = Array.isArray(assignment.args) ? [...assignment.args] : [];
+  const args: unknown[] = Array.isArray(assignment.args) ? [...assignment.args] : [];
   const deps = Array.isArray(assignment.dependencies) ? assignment.dependencies : [];
-  const dependencyPayloads: ExecutionDependency[] = [];
+  const inputPayloads: Record<string, JsonObject> = {};
   if (deps.length === 0) {
     return {
-      args: out,
-      dependencies: dependencyPayloads,
+      args,
+      inputs: inputPayloads,
     };
   }
 
-  await Promise.all(
-    deps.map(async (dep) => {
-      const chunk = await fetchWorkflowNodeOutputChunk(dep.workflow_id, dep.node_id, 0, 1);
-      if (chunk.mode === "array" && (chunk.total_items ?? 0) > MAX_INLINE_DEP_ARRAY_ITEMS) {
-        throw new Error(
-          `dependency ${dep.node_id} too large for inline fetch (${chunk.total_items} items); use chunked consumption`,
-        );
-      }
-      if (
-        (chunk.mode === "string" || chunk.mode === "json") &&
-        (chunk.total_chars ?? 0) > MAX_INLINE_DEP_TEXT_CHARS
-      ) {
-        throw new Error(
-          `dependency ${dep.node_id} too large for inline fetch (${chunk.total_chars} chars); use chunked consumption`,
-        );
-      }
-    }),
-  );
-
   const fetched = await Promise.all(
     deps.map(async (dep) => {
-      const payload = await fetchWorkflowNodeOutput(dep.workflow_id, dep.node_id);
+      const payload = await fetchDependencyPayload(dep, log);
       return { dep, payload };
     }),
   );
 
   for (const item of fetched) {
-    dependencyPayloads.push({
-      workflow_id: item.dep.workflow_id,
-      node_id: item.dep.node_id,
-      payload: item.payload,
-    });
+    inputPayloads[item.dep.node_id] = item.payload;
 
-    log("Dependency output loaded (kept as reference)", {
+    log("Dependency output loaded for execution context", {
       workflow_id: item.dep.workflow_id,
       node_id: item.dep.node_id,
     });
   }
 
   return {
-    args: out,
-    dependencies: dependencyPayloads,
+    args,
+    inputs: inputPayloads,
   };
 }
 
@@ -356,11 +440,12 @@ export async function runWorkerOnce(deps: RunOnceDeps): Promise<void> {
     wasmResult = syntheticResult;
   } else {
     const execution = await buildExecutionContext(assignment, deps.log);
+    const executionArgs = Array.isArray(assignment.args) ? [...assignment.args] : [];
     wasmResult = await executeWasmJob(
       deps.ensureWasmWorker,
       deps.resetWasmWorker,
       assignment,
-      execution.args,
+      executionArgs,
       execution,
     );
   }

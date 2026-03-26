@@ -1,8 +1,8 @@
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <emscripten/emscripten.h>
+
+#include "../common/runtime_json.hpp"
 
 namespace {
 constexpr int kInputCap = 8 * 1024 * 1024;
@@ -16,77 +16,6 @@ int g_output_len = 0;
 
 uint32_t next_lcg(uint32_t state) {
     return state * 1664525u + 1013904223u;
-}
-
-int extract_ints(const char* data, int len, long long* out, int max_out) {
-    int found = 0;
-    int i = 0;
-    while (i < len && found < max_out) {
-        if (!(data[i] == '-' || std::isdigit(static_cast<unsigned char>(data[i])))) {
-            ++i;
-            continue;
-        }
-        int sign = 1;
-        if (data[i] == '-') {
-            sign = -1;
-            ++i;
-        }
-        if (i >= len || !std::isdigit(static_cast<unsigned char>(data[i]))) {
-            continue;
-        }
-        long long value = 0;
-        while (i < len && std::isdigit(static_cast<unsigned char>(data[i]))) {
-            value = value * 10 + static_cast<long long>(data[i] - '0');
-            ++i;
-        }
-        out[found++] = value * sign;
-    }
-    return found;
-}
-
-long long extract_named_int(const char* data, int len, const char* key, long long fallback) {
-    const int key_len = static_cast<int>(std::strlen(key));
-    for (int i = 0; i + key_len + 2 < len; ++i) {
-        if (data[i] != '"') {
-            continue;
-        }
-        bool match = true;
-        for (int j = 0; j < key_len; ++j) {
-            if (data[i + 1 + j] != key[j]) {
-                match = false;
-                break;
-            }
-        }
-        if (!match || data[i + 1 + key_len] != '"') {
-            continue;
-        }
-        int k = i + 1 + key_len + 1;
-        while (k < len && data[k] != ':') {
-            ++k;
-        }
-        if (k >= len) {
-            continue;
-        }
-        ++k;
-        while (k < len && std::isspace(static_cast<unsigned char>(data[k]))) {
-            ++k;
-        }
-        int sign = 1;
-        if (k < len && data[k] == '-') {
-            sign = -1;
-            ++k;
-        }
-        if (k >= len || !std::isdigit(static_cast<unsigned char>(data[k]))) {
-            continue;
-        }
-        long long value = 0;
-        while (k < len && std::isdigit(static_cast<unsigned char>(data[k]))) {
-            value = value * 10 + static_cast<long long>(data[k] - '0');
-            ++k;
-        }
-        return value * sign;
-    }
-    return fallback;
 }
 
 const char* domain_name(int id) {
@@ -188,12 +117,12 @@ EMSCRIPTEN_KEEPALIVE int run_json(int input_len) {
 
     const char* in = reinterpret_cast<const char*>(g_input);
     long long values[4] = {1400000LL, 20260301LL, 3LL, 37LL};
-    extract_ints(in, input_len, values, 4);
+    runtime_json::extract_ints(in, input_len, values, 4);
 
-    const int target_bytes = static_cast<int>(extract_named_int(in, input_len, "target_bytes", values[0]));
-    const uint32_t seed = static_cast<uint32_t>(extract_named_int(in, input_len, "seed", values[1]));
-    const int domains = static_cast<int>(extract_named_int(in, input_len, "domains", values[2]));
-    const int bias_ai = static_cast<int>(extract_named_int(in, input_len, "bias_ai", values[3]));
+    const int target_bytes = static_cast<int>(runtime_json::extract_named_int(in, input_len, "target_bytes", values[0]));
+    const uint32_t seed = static_cast<uint32_t>(runtime_json::extract_named_int(in, input_len, "seed", values[1]));
+    const int domains = static_cast<int>(runtime_json::extract_named_int(in, input_len, "domains", values[2]));
+    const int bias_ai = static_cast<int>(runtime_json::extract_named_int(in, input_len, "bias_ai", values[3]));
     return write_snapshot_json_string(target_bytes, seed, domains, bias_ai);
 }
 
