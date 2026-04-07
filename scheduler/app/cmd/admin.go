@@ -925,6 +925,7 @@ func compileCPPToWasmIfNeeded(sourcePath, outputPath string) error {
 		"-s", "STANDALONE_WASM=1",
 		"-s", "ALLOW_MEMORY_GROWTH=1",
 		"-s", "INITIAL_MEMORY=67108864",
+		"-s", "ERROR_ON_UNDEFINED_SYMBOLS=0",
 		"--no-entry",
 		"-Wl,--export-all",
 		"-o", outputPath,

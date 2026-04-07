@@ -77,6 +77,53 @@ inline long long extract_named_int(const char* data, int len, const char* key, l
     return fallback;
 }
 
+inline int extract_named_string(const char* data, int len, const char* key, const char** out_ptr) {
+    const int key_len = static_cast<int>(std::strlen(key));
+    for (int i = 0; i + key_len + 3 < len; ++i) {
+        if (data[i] != '"') {
+            continue;
+        }
+        bool match = true;
+        for (int j = 0; j < key_len; ++j) {
+            if (data[i + 1 + j] != key[j]) {
+                match = false;
+                break;
+            }
+        }
+        if (!match || data[i + 1 + key_len] != '"') {
+            continue;
+        }
+        int k = i + 1 + key_len + 1;
+        while (k < len && data[k] != ':') {
+            ++k;
+        }
+        if (k >= len) {
+            continue;
+        }
+        ++k;
+        while (k < len && std::isspace(static_cast<unsigned char>(data[k]))) {
+            ++k;
+        }
+        if (k >= len || data[k] != '"') {
+            continue;
+        }
+        ++k;
+        const char* start = data + k;
+        int n = 0;
+        while (k + n < len) {
+            const char c = start[n];
+            if (c == '"' || c == '\\') {
+                break;
+            }
+            ++n;
+        }
+        *out_ptr = start;
+        return n;
+    }
+    *out_ptr = nullptr;
+    return 0;
+}
+
 inline int extract_first_output_string(const char* data, int len, const char** out_ptr) {
     const char* needle = "\"output\":\"";
     const int needle_len = 10;

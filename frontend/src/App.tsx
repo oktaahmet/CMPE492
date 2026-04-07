@@ -443,7 +443,7 @@ export default function App() {
       <div className="pointer-events-none absolute -right-20 top-16 h-72 w-72 rounded-full bg-amber-300/20 blur-3xl" />
       <div className="pointer-events-none absolute bottom-8 left-1/2 h-56 w-56 -translate-x-1/2 rounded-full bg-emerald-400/20 blur-3xl" />
 
-      <div className={`relative mx-auto flex w-full flex-col gap-4 ${route === "runtime" ? "max-w-[92rem]" : "max-w-6xl"}`}>
+      <div className="relative mx-auto flex w-full max-w-[92rem] flex-col gap-4">
         <Card className="border-border/70 bg-card/90 backdrop-blur">
           <CardHeader className="gap-3">
             <CardTitle className="flex items-center gap-2 text-2xl">
