@@ -1,0 +1,18 @@
+{
+  "id": "wf-wikipedia-api-analysis-demo-009",
+  "nodes": [
+    {
+      "id": "analyze-wikipedia-api",
+      "wasm_url": "/example-9/analyze_wikipedia_api.wasm?v=1",
+      "args": [
+        {
+          "timeout_ms": 3000
+        }
+      ],
+      "result_schema": {
+        "output": { "type": "object", "required": true }
+      },
+      "reward_usdc": "0.05"
+    }
+  ]
+}
