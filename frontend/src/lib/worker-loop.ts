@@ -131,6 +131,7 @@ function executeWasmJob(
 
     const cleanup = () => {
       worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
       window.clearTimeout(timeoutID);
     };
 
@@ -148,7 +149,13 @@ function executeWasmJob(
       fail(new Error("wasm worker timeout"), "timeout");
     }, WASM_WORKER_TIMEOUT_MS);
 
+    const onError = (event: ErrorEvent) => {
+      const message = event.message || "wasm worker script error";
+      fail(new Error(message), "worker_error");
+    };
+
     worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
     try {
       worker.postMessage({
         req_id: requestID,

@@ -62,9 +62,13 @@ export type RuntimeWorkflowNode = {
   depends_on?: string[];
   priority?: number;
   wasm_url: string;
+  execution_target?: "browser_worker" | "server";
   reward_usdc: string;
   completed: boolean;
   enqueued: boolean;
+  replication_factor?: number;
+  acceptance_policy?: "consensus" | "collect_all";
+  traits?: string[];
 };
 
 export type RuntimeWorkflowSnapshot = {
@@ -77,16 +81,21 @@ export type RuntimeJobSnapshot = {
   job_id: string;
   workflow_id: string;
   node_id: string;
+  execution_target?: "browser_worker" | "server";
   assigned_workers?: string[];
   submitted_workers?: string[];
   finalized: boolean;
   accepted_workers: number;
   queue_index: number;
+  required_replicas: number;
+  acceptance_policy?: "consensus" | "collect_all";
+  traits?: string[];
 };
 
 export type RuntimeSnapshot = {
   active_workflow_id?: string;
   loaded_workflow_id?: string;
+  topology_mode?: string;
   stats: RuntimeStats;
   workflow?: RuntimeWorkflowSnapshot;
   jobs?: RuntimeJobSnapshot[];

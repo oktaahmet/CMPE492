@@ -215,7 +215,7 @@ export default function App() {
     if (wasmWorkerRef.current) {
       return wasmWorkerRef.current;
     }
-    wasmWorkerRef.current = new Worker(new URL("./worker-runner.js", import.meta.url));
+    wasmWorkerRef.current = new Worker(new URL("./worker-runner.js", import.meta.url), { type: "module" });
     log("WASM worker initialized");
     return wasmWorkerRef.current;
   };

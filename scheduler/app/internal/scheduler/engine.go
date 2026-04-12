@@ -43,6 +43,8 @@ type jobState struct {
 	submitted        map[string]string
 	submittedPayload map[string]map[string]any
 	acceptedPayload  map[string]any
+	acceptedResult   string
+	acceptedWorkers  int
 	finalized        bool
 }
 
@@ -98,14 +100,17 @@ const (
 )
 
 type JobRuntimeSnapshot struct {
-	JobID            string   `json:"job_id"`
-	WorkflowID       string   `json:"workflow_id"`
-	NodeID           string   `json:"node_id"`
-	AssignedWorkers  []string `json:"assigned_workers,omitempty"`
-	SubmittedWorkers []string `json:"submitted_workers,omitempty"`
-	Finalized        bool     `json:"finalized"`
-	AcceptedWorkers  int      `json:"accepted_workers"`
-	QueueIndex       int      `json:"queue_index"`
+	JobID            string           `json:"job_id"`
+	WorkflowID       string           `json:"workflow_id"`
+	NodeID           string           `json:"node_id"`
+	AssignedWorkers  []string         `json:"assigned_workers,omitempty"`
+	SubmittedWorkers []string         `json:"submitted_workers,omitempty"`
+	Finalized        bool             `json:"finalized"`
+	AcceptedWorkers  int              `json:"accepted_workers"`
+	QueueIndex       int              `json:"queue_index"`
+	RequiredReplicas int              `json:"required_replicas"`
+	AcceptancePolicy AcceptancePolicy `json:"acceptance_policy,omitempty"`
+	Traits           []string         `json:"traits,omitempty"`
 }
 
 func NewEngine(cfg Config) *Engine {
@@ -142,6 +147,13 @@ func (e *Engine) Enqueue(job Job) error {
 	if job.WasmURL == "" {
 		return errors.New("wasm_url is required")
 	}
+	if job.ReplicationFactor < 0 {
+		return errors.New("replication_factor must be >= 0")
+	}
+	if !IsValidAcceptancePolicy(string(job.AcceptancePolicy)) {
+		return errors.New("acceptance_policy is invalid")
+	}
+	job.AcceptancePolicy = NormalizeAcceptancePolicy(string(job.AcceptancePolicy))
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -180,7 +192,8 @@ func (e *Engine) AssignNext(workerID string) (Assignment, bool) {
 		if _, alreadySubmitted := state.submitted[workerID]; alreadySubmitted {
 			continue
 		}
-		if len(state.assignments)+len(state.submitted) >= e.cfg.ReplicationFactor {
+		requiredReplicas := replicationFactorForJob(state.job, e.cfg.ReplicationFactor)
+		if len(state.assignments)+len(state.submitted) >= requiredReplicas {
 			continue
 		}
 
@@ -193,7 +206,7 @@ func (e *Engine) AssignNext(workerID string) (Assignment, bool) {
 			Args:         append([]any(nil), state.job.Args...),
 			Dependencies: append([]DependencyRef(nil), state.job.Dependencies...),
 			RewardUSDC:   state.job.RewardUSDC,
-			RequiredRep:  e.cfg.ReplicationFactor,
+			RequiredRep:  requiredReplicas,
 		}, true
 	}
 
@@ -234,18 +247,38 @@ func (e *Engine) SubmitResult(req ResultSubmission) (Decision, error) {
 	state.submitted[req.WorkerID] = submissionDigest
 	state.submittedPayload[req.WorkerID] = cloneJSONMap(req.ResultPayload)
 
+	requiredReplicas := replicationFactorForJob(state.job, e.cfg.ReplicationFactor)
+	policy := NormalizeAcceptancePolicy(string(state.job.AcceptancePolicy))
 	acceptedSig, acceptedWorkers := majority(state.submitted)
-	if acceptedSig != "" && acceptedWorkers >= quorum(e.cfg.ReplicationFactor) {
+	if policy == AcceptancePolicyCollectAll {
+		if len(state.submitted) >= requiredReplicas {
+			if !state.finalized {
+				state.finalized = true
+				e.finalizedJobs++
+			}
+			acceptedPayload := collectAllAcceptedPayload(state.submittedPayload)
+			acceptedDigest, err := canonicalSubmissionDigest(acceptedPayload)
+			if err != nil {
+				return Decision{}, err
+			}
+			state.acceptedPayload = acceptedPayload
+			state.acceptedResult = acceptedDigest
+			state.acceptedWorkers = len(state.submitted)
+			e.appendMissingPaymentEventsLocked(state.job, acceptedDigest, submittedWorkerIDs(state.submitted))
+		}
+	} else if acceptedSig != "" && acceptedWorkers >= quorum(requiredReplicas) {
 		if !state.finalized {
 			state.finalized = true
 			e.finalizedJobs++
 		}
 		acceptedWorkerIDs := workersForSig(state.submitted, acceptedSig)
 		state.acceptedPayload = pickAcceptedPayload(state.submittedPayload, acceptedWorkerIDs)
+		state.acceptedResult = acceptedSig
+		state.acceptedWorkers = acceptedWorkers
 		e.appendMissingPaymentEventsLocked(state.job, acceptedSig, acceptedWorkerIDs)
 	}
 
-	if !state.finalized && len(state.submitted) >= e.cfg.ReplicationFactor {
+	if !state.finalized && policy == AcceptancePolicyConsensus && len(state.submitted) >= requiredReplicas {
 		resetSubmissionRoundLocked(state)
 	}
 
@@ -447,7 +480,8 @@ func (e *Engine) WorkflowJobSnapshots(workflowID string) []JobRuntimeSnapshot {
 		}
 		sort.Strings(submittedWorkers)
 
-		_, acceptedWorkers := majority(state.submitted)
+		acceptedWorkers := acceptedWorkersForState(state)
+		requiredReplicas := replicationFactorForJob(state.job, e.cfg.ReplicationFactor)
 		out = append(out, JobRuntimeSnapshot{
 			JobID:            jobID,
 			WorkflowID:       state.job.WorkflowID,
@@ -457,6 +491,9 @@ func (e *Engine) WorkflowJobSnapshots(workflowID string) []JobRuntimeSnapshot {
 			Finalized:        state.finalized,
 			AcceptedWorkers:  acceptedWorkers,
 			QueueIndex:       queueIndexByJobID[jobID],
+			RequiredReplicas: requiredReplicas,
+			AcceptancePolicy: state.job.AcceptancePolicy,
+			Traits:           append([]string(nil), state.job.Traits...),
 		})
 	}
 
@@ -591,13 +628,17 @@ func (e *Engine) ProcessPayments(persistIntermediate func([]PaymentEvent) error)
 
 func (e *Engine) buildDecision(state *jobState) Decision {
 	sig, count := majority(state.submitted)
+	if state.finalized {
+		sig = state.acceptedResult
+		count = state.acceptedWorkers
+	}
 	return Decision{
 		JobID:            state.job.ID,
 		Finalized:        state.finalized,
 		AcceptedResult:   sig,
 		AcceptedPayload:  cloneJSONMap(state.acceptedPayload),
 		AcceptedWorkers:  count,
-		RequiredReplicas: e.cfg.ReplicationFactor,
+		RequiredReplicas: replicationFactorForJob(state.job, e.cfg.ReplicationFactor),
 	}
 }
 
@@ -688,6 +729,58 @@ func resetSubmissionRoundLocked(state *jobState) {
 	state.assignments = map[string]time.Time{}
 	state.submitted = map[string]string{}
 	state.submittedPayload = map[string]map[string]any{}
+}
+
+func replicationFactorForJob(job Job, fallback int) int {
+	if job.ReplicationFactor > 0 {
+		return job.ReplicationFactor
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return 1
+}
+
+func acceptedWorkersForState(state *jobState) int {
+	if state == nil {
+		return 0
+	}
+	if state.finalized {
+		return state.acceptedWorkers
+	}
+	if NormalizeAcceptancePolicy(string(state.job.AcceptancePolicy)) == AcceptancePolicyCollectAll {
+		return len(state.submitted)
+	}
+	_, acceptedWorkers := majority(state.submitted)
+	return acceptedWorkers
+}
+
+func submittedWorkerIDs(submitted map[string]string) []string {
+	workers := make([]string, 0, len(submitted))
+	for workerID := range submitted {
+		workers = append(workers, workerID)
+	}
+	sort.Strings(workers)
+	return workers
+}
+
+func collectAllAcceptedPayload(payloadByWorker map[string]map[string]any) map[string]any {
+	workerIDs := make([]string, 0, len(payloadByWorker))
+	for workerID := range payloadByWorker {
+		workerIDs = append(workerIDs, workerID)
+	}
+	sort.Strings(workerIDs)
+
+	samples := make([]any, 0, len(workerIDs))
+	for _, workerID := range workerIDs {
+		samples = append(samples, cloneJSONMap(payloadByWorker[workerID]))
+	}
+	return map[string]any{
+		"output": map[string]any{
+			"sample_count": len(samples),
+			"samples":      samples,
+		},
+	}
 }
 
 func (e *Engine) appendMissingPaymentEventsLocked(job Job, acceptedSig string, workerIDs []string) {

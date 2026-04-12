@@ -57,11 +57,54 @@ function nodeStateClass(state: RuntimeNodeState): string {
   }
 }
 
-function shortenWorkerID(workerID: string): string {
-  if (workerID.length <= 12) {
-    return workerID;
+function isServerNode(node: RuntimeWorkflowNode, job?: RuntimeJobSnapshot): boolean {
+  return (job?.execution_target ?? node.execution_target) === "server";
+}
+
+function nodeTargetClass(node: RuntimeWorkflowNode, job?: RuntimeJobSnapshot): string {
+  if (isServerNode(node, job)) {
+    return "ring-2 ring-orange-300/70 ring-offset-2 ring-offset-white shadow-[0_18px_44px_rgba(15,23,42,0.08),0_0_0_1px_rgba(251,146,60,0.18)]";
   }
-  return `${workerID.slice(0, 6)}...${workerID.slice(-4)}`;
+  return "";
+}
+
+function targetChipClass(target?: RuntimeWorkflowNode["execution_target"]): string {
+  if (target === "server") {
+    return "bg-orange-100 text-orange-800";
+  }
+  return "bg-sky-100 text-sky-800";
+}
+
+function modalHeaderClass(state: RuntimeNodeState, serverNode: boolean): string {
+  if (state === "finalized") {
+    return serverNode
+      ? "border-b border-orange-200/80 bg-[radial-gradient(circle_at_top_left,rgba(249,115,22,0.18),transparent_32%),linear-gradient(180deg,#fffbf5,#fff7ed)]"
+      : "border-b border-emerald-200/80 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_35%),linear-gradient(180deg,#fbfffd,#ecfdf5)]";
+  }
+  if (state === "submitted") {
+    return "border-b border-violet-200/80 bg-[radial-gradient(circle_at_top_left,rgba(139,92,246,0.16),transparent_35%),linear-gradient(180deg,#fdfcff,#f5f3ff)]";
+  }
+  if (state === "assigned") {
+    return "border-b border-sky-200/80 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.16),transparent_35%),linear-gradient(180deg,#ffffff,#eff6ff)]";
+  }
+  if (state === "ready") {
+    return "border-b border-amber-200/80 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.16),transparent_35%),linear-gradient(180deg,#fffef9,#fffbeb)]";
+  }
+  return "border-b border-slate-200/80 bg-[radial-gradient(circle_at_top_left,rgba(148,163,184,0.14),transparent_35%),linear-gradient(180deg,#ffffff,#f8fafc)]";
+}
+
+function formatPolicy(policy?: RuntimeWorkflowNode["acceptance_policy"]): string {
+  if (policy === "collect_all") {
+    return "collect_all";
+  }
+  return "consensus";
+}
+
+function formatTarget(target?: RuntimeWorkflowNode["execution_target"]): string {
+  if (target === "server") {
+    return "server";
+  }
+  return "browser";
 }
 
 function depthOfNode(nodeID: string, nodeMap: Map<string, RuntimeWorkflowNode>, memo: Map<string, number>): number {
@@ -172,8 +215,15 @@ export function LiveRuntimePage() {
   const [error, setError] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [updatedAt, setUpdatedAt] = useState("");
+  const [selectedNodeID, setSelectedNodeID] = useState<string | null>(null);
 
   const graph = useMemo(() => computeGraph(runtime), [runtime]);
+  const selectedNode = useMemo(
+    () => graph?.nodes.find(({ node }) => node.id === selectedNodeID) ?? null,
+    [graph, selectedNodeID],
+  );
+  const selectedTarget = selectedNode?.job?.execution_target ?? selectedNode?.node.execution_target;
+  const selectedServerNode = selectedNode ? isServerNode(selectedNode.node, selectedNode.job) : false;
 
   useEffect(() => {
     let intervalID = 0;
@@ -234,6 +284,11 @@ export function LiveRuntimePage() {
               workflow={runtime?.active_workflow_id || runtime?.loaded_workflow_id || "-"}
             </Badge>
           </CardTitle>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <Badge variant="outline" className="text-[11px]">
+              topology={runtime?.topology_mode || "-"}
+            </Badge>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -316,13 +371,22 @@ export function LiveRuntimePage() {
                   {graph.nodes.map(({ node, job, state, x, y }) => {
                     const hasWorkerChips =
                       (job?.assigned_workers?.length ?? 0) > 0 || (job?.submitted_workers?.length ?? 0) > 0;
+                    const target = job?.execution_target ?? node.execution_target;
+                    const serverNode = isServerNode(node, job);
 
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={node.id}
-                        className={`absolute w-[188px] rounded-[1.25rem] border px-4 py-3 shadow-[0_18px_44px_rgba(15,23,42,0.08)] transition-transform duration-200 hover:-translate-y-1 ${nodeStateClass(state)}`}
+                        className={`absolute w-[188px] overflow-hidden rounded-[1.25rem] border px-4 py-3 text-left shadow-[0_18px_44px_rgba(15,23,42,0.08)] transition-transform duration-200 hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-slate-400/60 ${nodeStateClass(state)} ${nodeTargetClass(node, job)}`}
                         style={{ left: `${x}px`, top: `${y}px` }}
+                        onClick={() => setSelectedNodeID(node.id)}
                       >
+                        {serverNode ? (
+                          <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-orange-500 via-amber-400 to-orange-300" />
+                        ) : (
+                          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-sky-300 via-cyan-200 to-sky-100 opacity-70" />
+                        )}
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <div className="text-sm font-semibold">{node.id}</div>
@@ -337,32 +401,31 @@ export function LiveRuntimePage() {
 
                         <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
                           <span className="rounded-full bg-white/80 px-2 py-1">reward {node.reward_usdc}</span>
+                          <span className={`rounded-full px-2 py-1 font-medium ${targetChipClass(target)}`}>
+                            {formatTarget(target)}
+                          </span>
+                          <span className="rounded-full bg-white/80 px-2 py-1">
+                            rep {job?.required_replicas ?? node.replication_factor ?? 1}
+                          </span>
+                          <span className="rounded-full bg-white/80 px-2 py-1">
+                            {formatPolicy(job?.acceptance_policy ?? node.acceptance_policy)}
+                          </span>
                           <span className="rounded-full bg-white/80 px-2 py-1">
                             assigned {job?.assigned_workers?.length ?? 0}
                           </span>
                           <span className="rounded-full bg-white/80 px-2 py-1">
                             submitted {job?.submitted_workers?.length ?? 0}
                           </span>
+                          <span className="rounded-full bg-white/80 px-2 py-1">
+                            accepted {job?.accepted_workers ?? 0}
+                          </span>
                         </div>
 
-                        {hasWorkerChips ? (
-                          <div className="mt-3 text-[11px] text-slate-700">
-                            <div className="mb-1 font-medium text-slate-600">Workers</div>
-                            <div className="flex flex-wrap gap-1">
-                              {job?.assigned_workers?.map((workerID) => (
-                                <span key={`${node.id}-assigned-${workerID}`} className="rounded-full bg-sky-100 px-2 py-1 font-mono">
-                                  {shortenWorkerID(workerID)}
-                                </span>
-                              ))}
-                              {job?.submitted_workers?.map((workerID) => (
-                                <span key={`${node.id}-submitted-${workerID}`} className="rounded-full bg-violet-100 px-2 py-1 font-mono">
-                                  {shortenWorkerID(workerID)}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
+                        <div className="mt-3 flex items-center justify-between text-[11px] text-slate-600">
+                          <span>{(job?.traits ?? node.traits ?? []).length} tags</span>
+                          <span>{hasWorkerChips ? "tap for workers" : "tap for details"}</span>
+                        </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -371,6 +434,120 @@ export function LiveRuntimePage() {
           </CardContent>
         </Card>
       </div>
+
+      {selectedNode ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/25 p-4 backdrop-blur-sm"
+          onClick={() => setSelectedNodeID(null)}
+        >
+          <div
+            className="max-h-[88vh] w-full max-w-4xl overflow-hidden rounded-[2rem] border border-slate-200 bg-white/95 shadow-[0_30px_120px_rgba(15,23,42,0.25)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className={`${modalHeaderClass(selectedNode.state, selectedServerNode)} px-6 py-5`}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xl font-semibold text-slate-950">{selectedNode.node.id}</div>
+                  <div className="mt-1 text-xs uppercase tracking-[0.22em] text-slate-500">{selectedNode.state}</div>
+                </div>
+                <Button type="button" variant="outline" onClick={() => setSelectedNodeID(null)}>
+                  Close
+                </Button>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                <span className={`rounded-full px-3 py-1 font-medium ${targetChipClass(selectedTarget)}`}>
+                  {formatTarget(selectedTarget)}
+                </span>
+                <span className="rounded-full bg-slate-100 px-3 py-1">reward {selectedNode.node.reward_usdc}</span>
+                <span className="rounded-full bg-slate-100 px-3 py-1">
+                  rep {selectedNode.job?.required_replicas ?? selectedNode.node.replication_factor ?? 1}
+                </span>
+                <span className="rounded-full bg-slate-100 px-3 py-1">
+                  {formatPolicy(selectedNode.job?.acceptance_policy ?? selectedNode.node.acceptance_policy)}
+                </span>
+                <span className="rounded-full bg-slate-100 px-3 py-1">priority {selectedNode.node.priority ?? 0}</span>
+              </div>
+            </div>
+
+            <div className="max-h-[calc(88vh-150px)] space-y-5 overflow-auto px-6 py-5">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-xl font-semibold">{selectedNode.job?.assigned_workers?.length ?? 0}</div>
+                  <div className="text-xs text-slate-500">Assigned</div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-xl font-semibold">{selectedNode.job?.submitted_workers?.length ?? 0}</div>
+                  <div className="text-xs text-slate-500">Submitted</div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-xl font-semibold">{selectedNode.job?.accepted_workers ?? 0}</div>
+                  <div className="text-xs text-slate-500">Accepted</div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-xl font-semibold">{(selectedNode.job?.traits ?? selectedNode.node.traits ?? []).length}</div>
+                  <div className="text-xs text-slate-500">Traits</div>
+                </div>
+              </div>
+
+              {(selectedNode.job?.traits ?? selectedNode.node.traits ?? []).length > 0 ? (
+                <div>
+                  <div className="mb-2 text-sm font-medium text-slate-700">Traits</div>
+                  <div className="flex flex-wrap gap-2">
+                    {(selectedNode.job?.traits ?? selectedNode.node.traits ?? []).map((trait) => (
+                      <span key={`${selectedNode.node.id}-modal-trait-${trait}`} className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700">
+                        {trait}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                <div>
+                  <div className="mb-2 text-sm font-medium text-slate-700">Assigned Workers</div>
+                  <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                    {(selectedNode.job?.assigned_workers?.length ?? 0) > 0 ? (
+                      <div className="space-y-2">
+                        {selectedNode.job?.assigned_workers?.map((workerID) => (
+                          <div
+                            key={`${selectedNode.node.id}-modal-assigned-${workerID}`}
+                            className="w-full break-all rounded-2xl bg-sky-100 px-3 py-2 font-mono text-xs text-sky-900"
+                          >
+                            {workerID}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-500">No assigned workers.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 text-sm font-medium text-slate-700">Submitted Workers</div>
+                  <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                    {(selectedNode.job?.submitted_workers?.length ?? 0) > 0 ? (
+                      <div className="space-y-2">
+                        {selectedNode.job?.submitted_workers?.map((workerID) => (
+                          <div
+                            key={`${selectedNode.node.id}-modal-submitted-${workerID}`}
+                            className="w-full break-all rounded-2xl bg-violet-100 px-3 py-2 font-mono text-xs text-violet-900"
+                          >
+                            {workerID}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-500">No submitted workers.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

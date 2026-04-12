@@ -1,3 +1,5 @@
+name: x402-dev
+
 services:
   db:
     image: postgres:15-alpine
@@ -11,6 +13,7 @@ services:
       - "5432:5432"
 
   scheduler:
+    image: x402-scheduler:dev
     build:
       context: ./scheduler
       dockerfile: Dockerfile
@@ -24,6 +27,7 @@ services:
       - .env
     
   frontend:
+    image: x402-frontend:dev
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -39,4 +43,6 @@ services:
 
 volumes:
   postgres_data:
+    name: x402_postgres_data
   frontend_modules:
+    name: x402_frontend_modules
