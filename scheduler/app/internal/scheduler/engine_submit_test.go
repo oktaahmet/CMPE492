@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -338,5 +339,136 @@ func TestEngineSubmitResultRejectsUnassignedAndIgnoresDuplicateOrLateSubmit(t *t
 	}
 	if events := engine.PaymentQueueSnapshot(); len(events) != 2 {
 		t.Fatalf("expected exactly 2 payment events after duplicate/late submit checks, got %#v", events)
+	}
+}
+
+func TestEngineUsesJobSpecificReplicationFactor(t *testing.T) {
+	t.Parallel()
+
+	engine := NewEngine(Config{
+		ReplicationFactor: 3,
+		AssignmentTTL:     time.Minute,
+	})
+	job := Job{
+		ID:                "job-per-node-replication",
+		WorkflowID:        "wf",
+		NodeID:            "n1",
+		WasmURL:           "/job.wasm",
+		RewardUSDC:        "0.1",
+		ReplicationFactor: 5,
+	}
+	if err := engine.Enqueue(job); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+
+	for _, workerID := range []string{"w1", "w2", "w3", "w4", "w5"} {
+		assignment, ok := engine.AssignNext(workerID)
+		if !ok {
+			t.Fatalf("expected assignment for %s", workerID)
+		}
+		if assignment.RequiredRep != 5 {
+			t.Fatalf("expected required_rep=5, got %#v", assignment)
+		}
+	}
+	if _, ok := engine.AssignNext("w6"); ok {
+		t.Fatalf("expected sixth worker to be blocked by job-specific replication factor")
+	}
+
+	for _, workerID := range []string{"w1", "w2", "w3"} {
+		decision, err := engine.SubmitResult(ResultSubmission{
+			JobID:         job.ID,
+			WorkerID:      workerID,
+			ResultSig:     "shared",
+			ResultPayload: map[string]any{"output": float64(7)},
+		})
+		if err != nil {
+			t.Fatalf("SubmitResult(%s) error = %v", workerID, err)
+		}
+		if workerID != "w3" && decision.Finalized {
+			t.Fatalf("job should not finalize before quorum(5)=3 is reached")
+		}
+		if workerID == "w3" {
+			if !decision.Finalized {
+				t.Fatalf("job should finalize when 3 of 5 replicas agree")
+			}
+			if decision.RequiredReplicas != 5 {
+				t.Fatalf("expected RequiredReplicas=5, got %#v", decision)
+			}
+		}
+	}
+}
+
+func TestEngineCollectAllFinalizesAfterAllReplicasAndStoresSamples(t *testing.T) {
+	t.Parallel()
+
+	engine := NewEngine(Config{
+		ReplicationFactor: 3,
+		AssignmentTTL:     time.Minute,
+	})
+	job := Job{
+		ID:                "job-collect-all",
+		WorkflowID:        "wf",
+		NodeID:            "n1",
+		WasmURL:           "/job.wasm",
+		RewardUSDC:        "0.1",
+		ReplicationFactor: 4,
+		AcceptancePolicy:  AcceptancePolicyCollectAll,
+	}
+	if err := engine.Enqueue(job); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	for _, workerID := range []string{"w1", "w2", "w3", "w4"} {
+		if _, ok := engine.AssignNext(workerID); !ok {
+			t.Fatalf("expected assignment for %s", workerID)
+		}
+	}
+
+	for i, workerID := range []string{"w1", "w2", "w3", "w4"} {
+		decision, err := engine.SubmitResult(ResultSubmission{
+			JobID:         job.ID,
+			WorkerID:      workerID,
+			ResultSig:     fmt.Sprintf("sig-%d", i),
+			ResultPayload: map[string]any{"output": float64(i + 1)},
+		})
+		if err != nil {
+			t.Fatalf("SubmitResult(%s) error = %v", workerID, err)
+		}
+		if i < 3 && decision.Finalized {
+			t.Fatalf("collect_all job should not finalize early: %#v", decision)
+		}
+		if i == 3 {
+			if !decision.Finalized {
+				t.Fatalf("collect_all job should finalize after all required replicas")
+			}
+			if decision.RequiredReplicas != 4 || decision.AcceptedWorkers != 4 {
+				t.Fatalf("unexpected collect_all decision: %#v", decision)
+			}
+			output, ok := decision.AcceptedPayload["output"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected collect_all accepted payload to expose output object, got %#v", decision.AcceptedPayload)
+			}
+			if got := output["sample_count"]; got != 4 {
+				t.Fatalf("expected sample_count=4, got %#v", decision.AcceptedPayload)
+			}
+			samples, ok := output["samples"].([]any)
+			if !ok || len(samples) != 4 {
+				t.Fatalf("expected 4 samples, got %#v", output["samples"])
+			}
+		}
+	}
+
+	output, ok := engine.FinalizedOutput(job.ID)
+	if !ok {
+		t.Fatalf("expected finalized output for collect_all job")
+	}
+	finalOutput, ok := output["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected finalized output wrapper for collect_all payload: %#v", output)
+	}
+	if finalOutput["sample_count"] != 4 {
+		t.Fatalf("unexpected finalized collect_all payload: %#v", output)
+	}
+	if events := engine.PaymentQueueSnapshot(); len(events) != 4 {
+		t.Fatalf("expected 4 payment events for collect_all job, got %#v", events)
 	}
 }

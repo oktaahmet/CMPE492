@@ -213,7 +213,7 @@ func adminWorkflowUploadHandler(
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := ensureWorkflowWasmArtifacts(spec, uploadedWorkflowSpecPath(spec.ID)); err != nil {
+		if err := ensureWorkflowArtifacts(spec, uploadedWorkflowSpecPath(spec.ID)); err != nil {
 			if cleanupErr := cleanupUploadedWorkflowArtifacts(spec.ID); cleanupErr != nil {
 				log.Printf("failed to cleanup uploaded workflow after compile error: workflow_id=%s err=%v", spec.ID, cleanupErr)
 			}
@@ -417,7 +417,7 @@ func activateWorkflow(
 		workflowManager.SetTopologyMode(previousMode)
 		return adminWorkflowActivateResponse{}, err
 	}
-	if err := enqueueWorkflowJobs(engine, jobs); err != nil {
+	if err := dispatchWorkflowJobs(ctx, engine, workflowManager, store, jobs); err != nil {
 		workflowManager.ClearWorkflow()
 		workflowManager.SetTopologyMode(previousMode)
 		return adminWorkflowActivateResponse{}, err
@@ -507,7 +507,7 @@ func loadWorkflowFromPath(
 	if err != nil {
 		return scheduler.WorkflowSpec{}, scheduler.WorkflowLoadResult{}, 0, err
 	}
-	if err := enqueueWorkflowJobs(engine, jobs); err != nil {
+	if err := dispatchWorkflowJobs(ctx, engine, workflowManager, store, jobs); err != nil {
 		workflowManager.ClearWorkflow()
 		return scheduler.WorkflowSpec{}, scheduler.WorkflowLoadResult{}, 0, err
 	}
@@ -535,7 +535,7 @@ func prepareWorkflowLoad(
 			return scheduler.WorkflowSpec{}, nil, err
 		}
 	}
-	if err := ensureWorkflowWasmArtifacts(normalized, path); err != nil {
+	if err := ensureWorkflowArtifacts(normalized, path); err != nil {
 		return scheduler.WorkflowSpec{}, nil, err
 	}
 
@@ -767,7 +767,7 @@ func isUploadedWorkflowPath(path string) bool {
 	return strings.Contains(path, string(filepath.Separator)+"uploaded"+string(filepath.Separator))
 }
 
-func ensureWorkflowWasmArtifacts(spec scheduler.WorkflowSpec, specPath string) error {
+func ensureWorkflowArtifacts(spec scheduler.WorkflowSpec, specPath string) error {
 	specPath = strings.TrimSpace(specPath)
 	if specPath == "" {
 		return fmt.Errorf("workflow spec path is required")
@@ -791,9 +791,19 @@ func ensureWorkflowWasmArtifacts(spec scheduler.WorkflowSpec, specPath string) e
 		if err != nil {
 			return fmt.Errorf("node %s: %w", node.ID, err)
 		}
-		outputPath := filepath.Join("static", filepath.FromSlash(relOut))
-		if err := compileCPPToWasmIfNeeded(sourcePath, outputPath); err != nil {
-			return fmt.Errorf("node %s compile failed: %w", node.ID, err)
+		if scheduler.NormalizeExecutionTarget(string(node.ExecutionTarget)) == scheduler.ExecutionTargetServer {
+			outputPath, err := nativeExecutablePathFromWasmURL(node.WasmURL)
+			if err != nil {
+				return fmt.Errorf("node %s native path invalid: %w", node.ID, err)
+			}
+			if err := compileCPPToNativeIfNeeded(sourcePath, outputPath); err != nil {
+				return fmt.Errorf("node %s native compile failed: %w", node.ID, err)
+			}
+		} else {
+			outputPath := filepath.Join("static", filepath.FromSlash(relOut))
+			if err := compileCPPToWasmIfNeeded(sourcePath, outputPath); err != nil {
+				return fmt.Errorf("node %s compile failed: %w", node.ID, err)
+			}
 		}
 		built[relOut] = true
 	}
@@ -928,6 +938,43 @@ func compileCPPToWasmIfNeeded(sourcePath, outputPath string) error {
 		"-s", "ERROR_ON_UNDEFINED_SYMBOLS=0",
 		"--no-entry",
 		"-Wl,--export-all",
+		"-o", outputPath,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, msg)
+	}
+	return nil
+}
+
+func compileCPPToNativeIfNeeded(sourcePath, outputPath string) error {
+	srcInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		return err
+	}
+	if outInfo, err := os.Stat(outputPath); err == nil {
+		if !srcInfo.ModTime().After(outInfo.ModTime()) {
+			return nil
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return err
+	}
+
+	runnerPath := filepath.Join("workflows", "common", "native_json_runner.cpp")
+	cmd := exec.Command(
+		"g++",
+		sourcePath,
+		runnerPath,
+		"-std=c++17",
+		"-O3",
 		"-o", outputPath,
 	)
 	output, err := cmd.CombinedOutput()

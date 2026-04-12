@@ -3,7 +3,7 @@ FROM golang:1.25-bookworm
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends emscripten \
+  && apt-get install -y --no-install-recommends emscripten g++ \
   && rm -rf /var/lib/apt/lists/*
 
 COPY app/go.mod app/go.sum ./

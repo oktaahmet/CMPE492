@@ -14,13 +14,17 @@ type WorkflowSpec struct {
 }
 
 type WorkflowNode struct {
-	ID           string                      `json:"id"`
-	DependsOn    []string                    `json:"depends_on,omitempty"`
-	Priority     int                         `json:"priority,omitempty"`
-	WasmURL      string                      `json:"wasm_url"`
-	Args         []any                       `json:"args,omitempty"`
-	ResultSchema map[string]PayloadFieldRule `json:"result_schema,omitempty"`
-	RewardUSDC   string                      `json:"reward_usdc"`
+	ID                string                      `json:"id"`
+	DependsOn         []string                    `json:"depends_on,omitempty"`
+	Priority          int                         `json:"priority,omitempty"`
+	WasmURL           string                      `json:"wasm_url"`
+	ExecutionTarget   ExecutionTarget             `json:"execution_target,omitempty"`
+	Args              []any                       `json:"args,omitempty"`
+	ResultSchema      map[string]PayloadFieldRule `json:"result_schema,omitempty"`
+	RewardUSDC        string                      `json:"reward_usdc"`
+	ReplicationFactor int                         `json:"replication_factor,omitempty"`
+	AcceptancePolicy  AcceptancePolicy            `json:"acceptance_policy,omitempty"`
+	Traits            []string                    `json:"traits,omitempty"`
 }
 
 type WorkflowLoadResult struct {
@@ -55,13 +59,17 @@ type WorkflowManager struct {
 }
 
 type WorkflowNodeSnapshot struct {
-	ID         string   `json:"id"`
-	DependsOn  []string `json:"depends_on,omitempty"`
-	Priority   int      `json:"priority,omitempty"`
-	WasmURL    string   `json:"wasm_url"`
-	RewardUSDC string   `json:"reward_usdc"`
-	Completed  bool     `json:"completed"`
-	Enqueued   bool     `json:"enqueued"`
+	ID                string           `json:"id"`
+	DependsOn         []string         `json:"depends_on,omitempty"`
+	Priority          int              `json:"priority,omitempty"`
+	WasmURL           string           `json:"wasm_url"`
+	ExecutionTarget   ExecutionTarget  `json:"execution_target,omitempty"`
+	RewardUSDC        string           `json:"reward_usdc"`
+	Completed         bool             `json:"completed"`
+	Enqueued          bool             `json:"enqueued"`
+	ReplicationFactor int              `json:"replication_factor,omitempty"`
+	AcceptancePolicy  AcceptancePolicy `json:"acceptance_policy,omitempty"`
+	Traits            []string         `json:"traits,omitempty"`
 }
 
 type WorkflowRuntimeSnapshot struct {
@@ -200,13 +208,17 @@ func (m *WorkflowManager) Snapshot() (WorkflowRuntimeSnapshot, bool) {
 	for _, nodeID := range runtime.topo {
 		node := runtime.nodesByID[nodeID]
 		nodes = append(nodes, WorkflowNodeSnapshot{
-			ID:         node.ID,
-			DependsOn:  append([]string(nil), node.DependsOn...),
-			Priority:   node.Priority,
-			WasmURL:    node.WasmURL,
-			RewardUSDC: node.RewardUSDC,
-			Completed:  isNodeCompleted(runtime, nodeID),
-			Enqueued:   runtime.enqueued[nodeID],
+			ID:                node.ID,
+			DependsOn:         append([]string(nil), node.DependsOn...),
+			Priority:          node.Priority,
+			WasmURL:           node.WasmURL,
+			ExecutionTarget:   node.ExecutionTarget,
+			RewardUSDC:        node.RewardUSDC,
+			Completed:         isNodeCompleted(runtime, nodeID),
+			Enqueued:          runtime.enqueued[nodeID],
+			ReplicationFactor: node.ReplicationFactor,
+			AcceptancePolicy:  node.AcceptancePolicy,
+			Traits:            append([]string(nil), node.Traits...),
 		})
 	}
 
@@ -305,14 +317,18 @@ func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 	}
 
 	return Job{
-		ID:           jobID(runtime.spec.ID, node.ID),
-		WorkflowID:   runtime.spec.ID,
-		NodeID:       node.ID,
-		WasmURL:      node.WasmURL,
-		Args:         args,
-		Dependencies: deps,
-		ResultSchema: node.ResultSchema,
-		RewardUSDC:   node.RewardUSDC,
+		ID:                jobID(runtime.spec.ID, node.ID),
+		WorkflowID:        runtime.spec.ID,
+		NodeID:            node.ID,
+		WasmURL:           node.WasmURL,
+		ExecutionTarget:   node.ExecutionTarget,
+		Args:              args,
+		Dependencies:      deps,
+		ResultSchema:      node.ResultSchema,
+		RewardUSDC:        node.RewardUSDC,
+		ReplicationFactor: node.ReplicationFactor,
+		AcceptancePolicy:  node.AcceptancePolicy,
+		Traits:            append([]string(nil), node.Traits...),
 	}
 }
 
@@ -344,6 +360,9 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		node.ID = strings.TrimSpace(node.ID)
 		node.WasmURL = strings.TrimSpace(node.WasmURL)
 		node.RewardUSDC = strings.TrimSpace(node.RewardUSDC)
+		node.AcceptancePolicy = NormalizeAcceptancePolicy(strings.TrimSpace(string(node.AcceptancePolicy)))
+		node.ExecutionTarget = NormalizeExecutionTarget(strings.TrimSpace(string(node.ExecutionTarget)))
+		node.Traits = normalizeTraits(node.Traits)
 
 		if node.ID == "" {
 			return WorkflowSpec{}, nil, nil, errors.New("node id is required")
@@ -351,8 +370,20 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		if node.WasmURL == "" {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("wasm_url is required for node %s", node.ID)
 		}
+		if !IsValidExecutionTarget(string(node.ExecutionTarget)) {
+			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s execution_target is invalid", node.ID)
+		}
 		if node.RewardUSDC == "" {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("reward_usdc is required for node %s", node.ID)
+		}
+		if node.ReplicationFactor < 0 {
+			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s replication_factor must be >= 0", node.ID)
+		}
+		if node.ExecutionTarget == ExecutionTargetServer && node.ReplicationFactor > 1 {
+			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s server execution_target requires replication_factor <= 1", node.ID)
+		}
+		if !IsValidAcceptancePolicy(string(node.AcceptancePolicy)) {
+			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s acceptance_policy is invalid", node.ID)
 		}
 		if _, exists := nodesByID[node.ID]; exists {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("duplicate node id: %s", node.ID)
@@ -402,6 +433,28 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		ID:    spec.ID,
 		Nodes: normalizedNodes,
 	}, nodesByID, topo, nil
+}
+
+func normalizeTraits(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool, len(raw))
+	traits := make([]string, 0, len(raw))
+	for _, trait := range raw {
+		trimmed := strings.ToLower(strings.TrimSpace(trait))
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		traits = append(traits, trimmed)
+	}
+	sort.Strings(traits)
+	if len(traits) == 0 {
+		return nil
+	}
+	return traits
 }
 
 func topologicalSort(nodesByID map[string]WorkflowNode, mode TopologyMode) ([]string, error) {

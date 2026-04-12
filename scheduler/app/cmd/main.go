@@ -290,44 +290,10 @@ func resultHandler(
 			return
 		}
 		if decision.Finalized {
-			output, ok := engine.FinalizedOutput(req.JobID)
-			if !ok {
-				output = map[string]any{}
-			}
-			workflowID, nodeID, found := engine.JobIdentity(req.JobID)
-			if found {
-				if err := store.UpsertWorkflowNodeCompletion(
-					r.Context(),
-					workflowID,
-					nodeID,
-					req.JobID,
-					decision.AcceptedResult,
-					output,
-					time.Now().UTC(),
-				); err != nil {
-					http.Error(w, "failed to persist finalized workflow node state", http.StatusInternalServerError)
-					return
-				}
-			} else {
-				http.Error(w, "job identity not found for finalized result", http.StatusInternalServerError)
+			if err := handleBrowserFinalizedDecision(r.Context(), engine, workflowManager, store, req.JobID, decision); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			if err := store.UpsertPaymentEvents(r.Context(), engine.PaymentQueueSnapshot()); err != nil {
-				http.Error(w, "failed to persist payment queue", http.StatusInternalServerError)
-				return
-			}
-
-			nextJobs, err := workflowManager.OnJobFinalized(req.JobID, output)
-			if err != nil {
-				http.Error(w, "failed to progress workflow", http.StatusInternalServerError)
-				return
-			} else {
-				if err := enqueueWorkflowJobs(engine, nextJobs); err != nil {
-					http.Error(w, "failed to enqueue unlocked workflow jobs", http.StatusInternalServerError)
-					return
-				}
-			}
-			triggerPaymentProcessingAsync(engine, store)
 		}
 		writeJSON(w, decision, http.StatusOK)
 	}
@@ -813,11 +779,45 @@ func bootstrapWorkflow(
 	return nil
 }
 
-func enqueueWorkflowJobs(engine *scheduler.Engine, jobs []scheduler.Job) error {
-	for _, job := range jobs {
-		if err := engine.Enqueue(job); err != nil {
-			return err
-		}
+func handleBrowserFinalizedDecision(
+	ctx context.Context,
+	engine *scheduler.Engine,
+	workflowManager *scheduler.WorkflowManager,
+	store *postgres.Store,
+	jobID string,
+	decision scheduler.Decision,
+) error {
+	output, ok := engine.FinalizedOutput(jobID)
+	if !ok {
+		output = map[string]any{}
 	}
+	workflowID, nodeID, found := engine.JobIdentity(jobID)
+	if !found {
+		return fmt.Errorf("job identity not found for finalized result")
+	}
+	if err := store.UpsertWorkflowNodeCompletion(
+		ctx,
+		workflowID,
+		nodeID,
+		jobID,
+		decision.AcceptedResult,
+		output,
+		time.Now().UTC(),
+	); err != nil {
+		return fmt.Errorf("failed to persist finalized workflow node state: %w", err)
+	}
+	if err := store.UpsertPaymentEvents(ctx, engine.PaymentQueueSnapshot()); err != nil {
+		return fmt.Errorf("failed to persist payment queue: %w", err)
+	}
+
+	nextJobs, err := workflowManager.OnJobFinalized(jobID, output)
+	if err != nil {
+		return fmt.Errorf("failed to progress workflow: %w", err)
+	}
+	if err := dispatchWorkflowJobs(ctx, engine, workflowManager, store, nextJobs); err != nil {
+		return fmt.Errorf("failed to enqueue unlocked workflow jobs: %w", err)
+	}
+
+	triggerPaymentProcessingAsync(engine, store)
 	return nil
 }
