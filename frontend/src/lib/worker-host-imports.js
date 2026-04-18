@@ -6,8 +6,9 @@ export function createImportObject(wasiState) {
     lastHTTPStatus: 0,
     lastErrorCode: 0,
   };
-  const FETCHX_MAX_RESPONSE_BYTES = 64 * 1024;
+  const FETCHX_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
   const FETCHX_DEFAULT_TIMEOUT_MS = 3000;
+  const FETCHX_MAX_TIMEOUT_MS = 10000;
   const FETCHX_ERROR_INVALID_ARGS = 1;
   const FETCHX_ERROR_INVALID_MEMORY = 2;
   const FETCHX_ERROR_INVALID_URL = 3;
@@ -104,6 +105,71 @@ export function createImportObject(wasiState) {
     abort: noop,
     emscripten_notify_memory_growth: noop,
     emscripten_memcpy_big: noop,
+    fetchx_bytes: (urlPtr, urlLen, outPtr, outCap, timeoutMs) => {
+      fetchState.lastHTTPStatus = 0;
+      fetchState.lastErrorCode = 0;
+
+      const outputCap = toInt(outCap, 0);
+      if (outputCap <= 0) {
+        return setFetchError(FETCHX_ERROR_INVALID_ARGS);
+      }
+
+      const rawURL = readUTF8(urlPtr, urlLen);
+      if (typeof rawURL !== "string" || rawURL.trim() === "") {
+        return setFetchError(FETCHX_ERROR_INVALID_URL);
+      }
+
+      let resolvedURL;
+      try {
+        resolvedURL = new URL(rawURL, self.location?.href || "http://localhost/");
+      } catch {
+        return setFetchError(FETCHX_ERROR_INVALID_URL);
+      }
+      if (resolvedURL.protocol !== "http:" && resolvedURL.protocol !== "https:") {
+        return setFetchError(FETCHX_ERROR_BAD_PROTOCOL);
+      }
+
+      const xhr = new XMLHttpRequest();
+      const boundedTimeoutMs = Math.max(1, Math.min(toInt(timeoutMs, FETCHX_DEFAULT_TIMEOUT_MS), FETCHX_MAX_TIMEOUT_MS));
+      try {
+        xhr.open("GET", resolvedURL.toString(), false);
+        xhr.responseType = "arraybuffer";
+      } catch {
+        return setFetchError(FETCHX_ERROR_REQUEST_FAILED);
+      }
+
+      try {
+        xhr.timeout = boundedTimeoutMs;
+      } catch {
+        // Best-effort only: some runtimes may reject timeout on sync XHR.
+      }
+
+      try {
+        xhr.send();
+      } catch (error) {
+        const text = String(error);
+        if (text.includes("timeout")) {
+          return setFetchError(FETCHX_ERROR_TIMEOUT);
+        }
+        return setFetchError(FETCHX_ERROR_REQUEST_FAILED);
+      }
+
+      fetchState.lastHTTPStatus = toInt(xhr.status, 0);
+      if (fetchState.lastHTTPStatus < 200 || fetchState.lastHTTPStatus >= 300) {
+        return setFetchError(FETCHX_ERROR_HTTP_STATUS, fetchState.lastHTTPStatus);
+      }
+
+      const response = xhr.response;
+      const payload = response instanceof ArrayBuffer ? new Uint8Array(response) : new Uint8Array();
+      const maxWritable = Math.min(outputCap, FETCHX_MAX_RESPONSE_BYTES);
+      if (payload.length > maxWritable) {
+        return setFetchError(FETCHX_ERROR_RESPONSE_TOO_LARGE, fetchState.lastHTTPStatus);
+      }
+      if (!writeBytes(outPtr, payload)) {
+        return setFetchError(FETCHX_ERROR_INVALID_MEMORY, fetchState.lastHTTPStatus);
+      }
+      return payload.length;
+    },
     fetchx_text: (urlPtr, urlLen, outPtr, outCap, timeoutMs) => {
       fetchState.lastHTTPStatus = 0;
       fetchState.lastErrorCode = 0;
@@ -129,7 +195,7 @@ export function createImportObject(wasiState) {
       }
 
       const xhr = new XMLHttpRequest();
-      const boundedTimeoutMs = Math.max(1, Math.min(toInt(timeoutMs, FETCHX_DEFAULT_TIMEOUT_MS), 3000));
+      const boundedTimeoutMs = Math.max(1, Math.min(toInt(timeoutMs, FETCHX_DEFAULT_TIMEOUT_MS), FETCHX_MAX_TIMEOUT_MS));
       try {
         xhr.open("GET", resolvedURL.toString(), false);
       } catch {

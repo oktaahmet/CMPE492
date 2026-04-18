@@ -49,14 +49,15 @@ type jobState struct {
 }
 
 type Assignment struct {
-	JobID        string          `json:"job_id"`
-	WorkflowID   string          `json:"workflow_id"`
-	NodeID       string          `json:"node_id"`
-	WasmURL      string          `json:"wasm_url"`
-	Args         []any           `json:"args,omitempty"`
-	Dependencies []DependencyRef `json:"dependencies,omitempty"`
-	RewardUSDC   string          `json:"reward_usdc"`
-	RequiredRep  int             `json:"required_rep"`
+	JobID        string             `json:"job_id"`
+	WorkflowID   string             `json:"workflow_id"`
+	NodeID       string             `json:"node_id"`
+	WasmURL      string             `json:"wasm_url"`
+	Args         []any              `json:"args,omitempty"`
+	Dependencies []DependencyRef    `json:"dependencies,omitempty"`
+	Artifacts    []WorkflowArtifact `json:"artifacts,omitempty"`
+	RewardUSDC   string             `json:"reward_usdc"`
+	RequiredRep  int                `json:"required_rep"`
 }
 
 type ResultSubmission struct {
@@ -205,6 +206,7 @@ func (e *Engine) AssignNext(workerID string) (Assignment, bool) {
 			WasmURL:      state.job.WasmURL,
 			Args:         append([]any(nil), state.job.Args...),
 			Dependencies: append([]DependencyRef(nil), state.job.Dependencies...),
+			Artifacts:    cloneArtifacts(state.job.Artifacts),
 			RewardUSDC:   state.job.RewardUSDC,
 			RequiredRep:  requiredReplicas,
 		}, true

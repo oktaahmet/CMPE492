@@ -3,14 +3,16 @@ package scheduler
 import (
 	"errors"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"sync"
 )
 
 type WorkflowSpec struct {
-	ID    string         `json:"id"`
-	Nodes []WorkflowNode `json:"nodes"`
+	ID        string             `json:"id"`
+	Artifacts []WorkflowArtifact `json:"artifacts,omitempty"`
+	Nodes     []WorkflowNode     `json:"nodes"`
 }
 
 type WorkflowNode struct {
@@ -20,6 +22,8 @@ type WorkflowNode struct {
 	WasmURL           string                      `json:"wasm_url"`
 	ExecutionTarget   ExecutionTarget             `json:"execution_target,omitempty"`
 	Args              []any                       `json:"args,omitempty"`
+	UsesArtifacts     []string                    `json:"uses_artifacts,omitempty"`
+	OutputArtifacts   []WorkflowArtifact          `json:"output_artifacts,omitempty"`
 	ResultSchema      map[string]PayloadFieldRule `json:"result_schema,omitempty"`
 	RewardUSDC        string                      `json:"reward_usdc"`
 	ReplicationFactor int                         `json:"replication_factor,omitempty"`
@@ -59,17 +63,19 @@ type WorkflowManager struct {
 }
 
 type WorkflowNodeSnapshot struct {
-	ID                string           `json:"id"`
-	DependsOn         []string         `json:"depends_on,omitempty"`
-	Priority          int              `json:"priority,omitempty"`
-	WasmURL           string           `json:"wasm_url"`
-	ExecutionTarget   ExecutionTarget  `json:"execution_target,omitempty"`
-	RewardUSDC        string           `json:"reward_usdc"`
-	Completed         bool             `json:"completed"`
-	Enqueued          bool             `json:"enqueued"`
-	ReplicationFactor int              `json:"replication_factor,omitempty"`
-	AcceptancePolicy  AcceptancePolicy `json:"acceptance_policy,omitempty"`
-	Traits            []string         `json:"traits,omitempty"`
+	ID                string             `json:"id"`
+	DependsOn         []string           `json:"depends_on,omitempty"`
+	Priority          int                `json:"priority,omitempty"`
+	WasmURL           string             `json:"wasm_url"`
+	ExecutionTarget   ExecutionTarget    `json:"execution_target,omitempty"`
+	RewardUSDC        string             `json:"reward_usdc"`
+	Completed         bool               `json:"completed"`
+	Enqueued          bool               `json:"enqueued"`
+	UsesArtifacts     []string           `json:"uses_artifacts,omitempty"`
+	OutputArtifacts   []WorkflowArtifact `json:"output_artifacts,omitempty"`
+	ReplicationFactor int                `json:"replication_factor,omitempty"`
+	AcceptancePolicy  AcceptancePolicy   `json:"acceptance_policy,omitempty"`
+	Traits            []string           `json:"traits,omitempty"`
 }
 
 type WorkflowRuntimeSnapshot struct {
@@ -216,6 +222,8 @@ func (m *WorkflowManager) Snapshot() (WorkflowRuntimeSnapshot, bool) {
 			RewardUSDC:        node.RewardUSDC,
 			Completed:         isNodeCompleted(runtime, nodeID),
 			Enqueued:          runtime.enqueued[nodeID],
+			UsesArtifacts:     append([]string(nil), node.UsesArtifacts...),
+			OutputArtifacts:   cloneArtifacts(node.OutputArtifacts),
 			ReplicationFactor: node.ReplicationFactor,
 			AcceptancePolicy:  node.AcceptancePolicy,
 			Traits:            append([]string(nil), node.Traits...),
@@ -315,6 +323,16 @@ func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 			NodeID:     depID,
 		})
 	}
+	artifactByID := make(map[string]WorkflowArtifact, len(runtime.spec.Artifacts))
+	for _, artifact := range runtime.spec.Artifacts {
+		artifactByID[artifact.ID] = artifact
+	}
+	artifacts := make([]WorkflowArtifact, 0, len(node.UsesArtifacts))
+	for _, artifactID := range node.UsesArtifacts {
+		if artifact, ok := artifactByID[artifactID]; ok {
+			artifacts = append(artifacts, artifact)
+		}
+	}
 
 	return Job{
 		ID:                jobID(runtime.spec.ID, node.ID),
@@ -324,6 +342,8 @@ func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 		ExecutionTarget:   node.ExecutionTarget,
 		Args:              args,
 		Dependencies:      deps,
+		Artifacts:         cloneArtifacts(artifacts),
+		OutputArtifacts:   cloneArtifacts(node.OutputArtifacts),
 		ResultSchema:      node.ResultSchema,
 		RewardUSDC:        node.RewardUSDC,
 		ReplicationFactor: node.ReplicationFactor,
@@ -352,6 +372,10 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 	if len(spec.Nodes) == 0 {
 		return WorkflowSpec{}, nil, nil, errors.New("workflow nodes are required")
 	}
+	artifacts, artifactIDs, err := normalizeArtifacts(spec.Artifacts)
+	if err != nil {
+		return WorkflowSpec{}, nil, nil, err
+	}
 
 	nodesByID := make(map[string]WorkflowNode, len(spec.Nodes))
 	normalizedNodes := make([]WorkflowNode, 0, len(spec.Nodes))
@@ -363,6 +387,12 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		node.AcceptancePolicy = NormalizeAcceptancePolicy(strings.TrimSpace(string(node.AcceptancePolicy)))
 		node.ExecutionTarget = NormalizeExecutionTarget(strings.TrimSpace(string(node.ExecutionTarget)))
 		node.Traits = normalizeTraits(node.Traits)
+		node.UsesArtifacts = normalizeStringList(node.UsesArtifacts)
+		outputArtifacts, outputArtifactIDs, err := normalizeArtifacts(node.OutputArtifacts)
+		if err != nil {
+			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s output_artifacts invalid: %w", node.ID, err)
+		}
+		node.OutputArtifacts = outputArtifacts
 
 		if node.ID == "" {
 			return WorkflowSpec{}, nil, nil, errors.New("node id is required")
@@ -382,11 +412,22 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		if node.ExecutionTarget == ExecutionTargetServer && node.ReplicationFactor > 1 {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s server execution_target requires replication_factor <= 1", node.ID)
 		}
+		if node.ExecutionTarget != ExecutionTargetServer && len(node.OutputArtifacts) > 0 {
+			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s output_artifacts are currently supported only for server execution_target", node.ID)
+		}
 		if !IsValidAcceptancePolicy(string(node.AcceptancePolicy)) {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s acceptance_policy is invalid", node.ID)
 		}
+		if len(outputArtifactIDs) != len(node.OutputArtifacts) {
+			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s output_artifacts contains duplicate ids", node.ID)
+		}
 		if _, exists := nodesByID[node.ID]; exists {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("duplicate node id: %s", node.ID)
+		}
+		for _, artifactID := range node.UsesArtifacts {
+			if !artifactIDs[artifactID] {
+				return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s uses unknown artifact %s", node.ID, artifactID)
+			}
 		}
 
 		seenDeps := map[string]bool{}
@@ -430,9 +471,88 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 	}
 
 	return WorkflowSpec{
-		ID:    spec.ID,
-		Nodes: normalizedNodes,
+		ID:        spec.ID,
+		Artifacts: artifacts,
+		Nodes:     normalizedNodes,
 	}, nodesByID, topo, nil
+}
+
+func normalizeArtifacts(raw []WorkflowArtifact) ([]WorkflowArtifact, map[string]bool, error) {
+	seen := make(map[string]bool, len(raw))
+	out := make([]WorkflowArtifact, 0, len(raw))
+	for _, artifact := range raw {
+		artifact.ID = strings.TrimSpace(artifact.ID)
+		artifact.Path = strings.TrimSpace(strings.ReplaceAll(artifact.Path, "\\", "/"))
+		artifact.URL = strings.TrimSpace(artifact.URL)
+		artifact.SHA256 = strings.TrimSpace(artifact.SHA256)
+		artifact.ContentType = strings.TrimSpace(artifact.ContentType)
+		if artifact.ID == "" {
+			return nil, nil, errors.New("artifact id is required")
+		}
+		if !isSafeArtifactID(artifact.ID) {
+			return nil, nil, fmt.Errorf("artifact id is invalid: %s", artifact.ID)
+		}
+		if seen[artifact.ID] {
+			return nil, nil, fmt.Errorf("duplicate artifact id: %s", artifact.ID)
+		}
+		if artifact.Path == "" {
+			return nil, nil, fmt.Errorf("artifact %s path is required", artifact.ID)
+		}
+		cleaned := path.Clean(artifact.Path)
+		if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." || path.IsAbs(cleaned) {
+			return nil, nil, fmt.Errorf("artifact %s path must be relative and stay inside workflow folder", artifact.ID)
+		}
+		artifact.Path = cleaned
+		seen[artifact.ID] = true
+		out = append(out, artifact)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
+	return out, seen, nil
+}
+
+func isSafeArtifactID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func normalizeStringList(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneArtifacts(in []WorkflowArtifact) []WorkflowArtifact {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]WorkflowArtifact, len(in))
+	copy(out, in)
+	return out
 }
 
 func normalizeTraits(raw []string) []string {

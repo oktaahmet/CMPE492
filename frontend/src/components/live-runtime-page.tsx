@@ -4,7 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  fetchWorkflowNodeOutput,
   fetchRuntime,
+  type JsonObject,
   type RuntimeJobSnapshot,
   type RuntimeSnapshot,
   type RuntimeWorkflowNode,
@@ -105,6 +107,17 @@ function formatTarget(target?: RuntimeWorkflowNode["execution_target"]): string 
     return "server";
   }
   return "browser";
+}
+
+function formatJSONPreview(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function depthOfNode(nodeID: string, nodeMap: Map<string, RuntimeWorkflowNode>, memo: Map<string, number>): number {
@@ -216,6 +229,9 @@ export function LiveRuntimePage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [updatedAt, setUpdatedAt] = useState("");
   const [selectedNodeID, setSelectedNodeID] = useState<string | null>(null);
+  const [selectedOutput, setSelectedOutput] = useState<JsonObject | null>(null);
+  const [selectedOutputLoading, setSelectedOutputLoading] = useState(false);
+  const [selectedOutputError, setSelectedOutputError] = useState("");
 
   const graph = useMemo(() => computeGraph(runtime), [runtime]);
   const selectedNode = useMemo(
@@ -242,6 +258,41 @@ export function LiveRuntimePage() {
   useEffect(() => {
     void loadRuntime(false);
   }, []);
+
+  useEffect(() => {
+    const workflowID = runtime?.workflow?.workflow_id || runtime?.active_workflow_id || runtime?.loaded_workflow_id || "";
+    if (!selectedNodeID || !selectedNode?.state || selectedNode.state !== "finalized" || !workflowID) {
+      setSelectedOutput(null);
+      setSelectedOutputError("");
+      setSelectedOutputLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSelectedOutputLoading(true);
+    setSelectedOutputError("");
+    fetchWorkflowNodeOutput(workflowID, selectedNodeID)
+      .then((output) => {
+        if (!cancelled) {
+          setSelectedOutput(output);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSelectedOutput(null);
+          setSelectedOutputError(String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSelectedOutputLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [runtime?.active_workflow_id, runtime?.loaded_workflow_id, runtime?.workflow?.workflow_id, selectedNode?.state, selectedNodeID]);
 
   async function loadRuntime(silent: boolean) {
     if (silent) {
@@ -542,6 +593,25 @@ export function LiveRuntimePage() {
                       <div className="text-sm text-slate-500">No submitted workers.</div>
                     )}
                   </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-sm font-medium text-slate-700">Final Output</div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-950 p-4 text-slate-100">
+                  {selectedNode.state !== "finalized" ? (
+                    <div className="text-sm text-slate-400">Node is not finalized yet.</div>
+                  ) : selectedOutputLoading ? (
+                    <div className="text-sm text-slate-400">Loading output...</div>
+                  ) : selectedOutputError ? (
+                    <div className="text-sm text-red-200">{selectedOutputError}</div>
+                  ) : selectedOutput ? (
+                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
+                      {formatJSONPreview(selectedOutput)}
+                    </pre>
+                  ) : (
+                    <div className="text-sm text-slate-400">No output available.</div>
+                  )}
                 </div>
               </div>
             </div>

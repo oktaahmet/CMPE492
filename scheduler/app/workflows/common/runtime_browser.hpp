@@ -33,6 +33,12 @@ __attribute__((import_module("env"), import_name("fetchx_text"))) int fetchx_tex
     int out_ptr,
     int out_cap,
     int timeout_ms);
+__attribute__((import_module("env"), import_name("fetchx_bytes"))) int fetchx_bytes_import(
+    int url_ptr,
+    int url_len,
+    int out_ptr,
+    int out_cap,
+    int timeout_ms);
 __attribute__((import_module("env"), import_name("fetchx_last_http_status"))) int fetchx_last_http_status_import();
 __attribute__((import_module("env"), import_name("fetchx_last_error_code"))) int fetchx_last_error_code_import();
 __attribute__((import_module("env"), import_name("fetchx_max_response_bytes"))) int fetchx_max_response_bytes_import();
@@ -48,6 +54,25 @@ inline int fetch_text(const char* url, int url_len, char* out, int out_cap, int 
         static_cast<int>(reinterpret_cast<uintptr_t>(out)),
         out_cap,
         timeout_ms);
+}
+
+inline int fetch_bytes(const char* url, int url_len, unsigned char* out, int out_cap, int timeout_ms) {
+    if (!url || url_len <= 0 || !out || out_cap <= 0) {
+        return -1;
+    }
+    return fetchx_bytes_import(
+        static_cast<int>(reinterpret_cast<uintptr_t>(url)),
+        url_len,
+        static_cast<int>(reinterpret_cast<uintptr_t>(out)),
+        out_cap,
+        timeout_ms);
+}
+
+inline int fetch_bytes(const char* url, unsigned char* out, int out_cap, int timeout_ms = 3000) {
+    if (!url || !out || out_cap <= 0) {
+        return -1;
+    }
+    return fetch_bytes(url, static_cast<int>(std::strlen(url)), out, out_cap, timeout_ms);
 }
 
 inline int fetch_text(const char* url, char* out, int out_cap, int timeout_ms = 3000) {
@@ -72,6 +97,17 @@ inline FetchResult get(const char* url, char* out, int out_cap, int timeout_ms =
         fetchx_last_http_status_import(),
         fetchx_last_error_code_import(),
         out,
+    };
+}
+
+inline FetchResult get_bytes(const char* url, unsigned char* out, int out_cap, int timeout_ms = 3000) {
+    const int n = fetch_bytes(url, out, out_cap, timeout_ms);
+    return {
+        n >= 0,
+        n >= 0 ? n : 0,
+        fetchx_last_http_status_import(),
+        fetchx_last_error_code_import(),
+        reinterpret_cast<const char*>(out),
     };
 }
 

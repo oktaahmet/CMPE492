@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -105,6 +106,7 @@ func main() {
 	http.HandleFunc("/api/result", resultHandler(engine, workflowManager, store, maxResultPayloadBytes, workerAuth))
 	http.HandleFunc("/api/workflow/node-output", workflowNodeOutputHandler(store))
 	http.HandleFunc("/api/workflow/node-output/chunk", workflowNodeOutputChunkHandler(store))
+	http.HandleFunc("/api/workflow/artifact", workflowArtifactHandler(store))
 	http.HandleFunc("/api/payments", paymentsHandler(store, workerAuth))
 	http.HandleFunc("/api/stats", statsHandler(engine))
 	http.HandleFunc("/api/runtime", runtimeHandler(engine, workflowManager, store))
@@ -144,6 +146,117 @@ func main() {
 	err = http.ListenAndServe(":8080", nil)
 	if err != nil {
 		log.Fatal(err)
+	}
+}
+
+// workflowArtifactHandler serves static input artifacts and finalized server output artifacts.
+func workflowArtifactHandler(store *postgres.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		workflowID := strings.TrimSpace(r.URL.Query().Get("workflow_id"))
+		nodeID := strings.TrimSpace(r.URL.Query().Get("node_id"))
+		artifactID := strings.TrimSpace(r.URL.Query().Get("artifact_id"))
+		if workflowID == "" || artifactID == "" {
+			http.Error(w, "workflow_id and artifact_id are required", http.StatusBadRequest)
+			return
+		}
+		if !isSafeWorkflowID(workflowID) || (nodeID != "" && !isSafeWorkflowID(nodeID)) {
+			http.Error(w, "invalid workflow_id or node_id", http.StatusBadRequest)
+			return
+		}
+
+		specPath, err := resolveWorkflowSpecPathByID(workflowID)
+		if err != nil {
+			http.Error(w, "workflow not found", http.StatusNotFound)
+			return
+		}
+		spec, err := readWorkflowSpecFromPath(specPath)
+		if err != nil {
+			http.Error(w, "failed to read workflow", http.StatusInternalServerError)
+			return
+		}
+		normalized, err := scheduler.ValidateWorkflowSpec(spec)
+		if err != nil {
+			http.Error(w, "workflow validation failed", http.StatusInternalServerError)
+			return
+		}
+		normalized, err = hydrateWorkflowArtifacts(normalized, specPath)
+		if err != nil {
+			http.Error(w, "artifact metadata failed", http.StatusInternalServerError)
+			return
+		}
+
+		if nodeID != "" {
+			if store == nil {
+				http.Error(w, "artifact store unavailable", http.StatusInternalServerError)
+				return
+			}
+			if _, found, err := store.LoadWorkflowNodeOutput(r.Context(), workflowID, nodeID); err != nil {
+				http.Error(w, "failed to load workflow node output", http.StatusInternalServerError)
+				return
+			} else if !found {
+				http.Error(w, "workflow node output not found", http.StatusNotFound)
+				return
+			}
+			for _, node := range normalized.Nodes {
+				if node.ID != nodeID {
+					continue
+				}
+				for _, artifact := range node.OutputArtifacts {
+					if artifact.ID != artifactID {
+						continue
+					}
+					localPath, err := outputArtifactLocalPath(workflowID, nodeID, artifact.Path)
+					if err != nil {
+						http.Error(w, "artifact path invalid", http.StatusInternalServerError)
+						return
+					}
+					info, err := os.Stat(localPath)
+					if err != nil || info.IsDir() {
+						http.Error(w, "artifact not found", http.StatusNotFound)
+						return
+					}
+					contentType := strings.TrimSpace(artifact.ContentType)
+					if contentType == "" {
+						contentType = mime.TypeByExtension(filepath.Ext(localPath))
+					}
+					if contentType == "" {
+						contentType = "application/octet-stream"
+					}
+					sum, err := sha256File(localPath)
+					if err != nil {
+						http.Error(w, "artifact hash failed", http.StatusInternalServerError)
+						return
+					}
+					w.Header().Set("Content-Type", contentType)
+					w.Header().Set("X-Artifact-ID", artifact.ID)
+					w.Header().Set("X-Artifact-SHA256", sum)
+					w.Header().Set("X-Artifact-Size", strconv.FormatInt(info.Size(), 10))
+					http.ServeFile(w, r, localPath)
+					return
+				}
+			}
+			http.Error(w, "artifact not found", http.StatusNotFound)
+			return
+		}
+
+		for _, artifact := range normalized.Artifacts {
+			if artifact.ID != artifactID {
+				continue
+			}
+			w.Header().Set("Content-Type", artifact.ContentType)
+			w.Header().Set("X-Artifact-ID", artifact.ID)
+			w.Header().Set("X-Artifact-SHA256", artifact.SHA256)
+			w.Header().Set("X-Artifact-Size", strconv.FormatInt(artifact.Size, 10))
+			http.ServeFile(w, r, artifact.LocalPath)
+			return
+		}
+
+		http.Error(w, "artifact not found", http.StatusNotFound)
 	}
 }
 
