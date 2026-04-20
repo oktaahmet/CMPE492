@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -50,11 +52,26 @@ func executeServerJob(
 	runCtx, cancel := context.WithTimeout(ctx, serverExecutionTimeout)
 	defer cancel()
 
-	inputContext, err := buildServerExecutionContext(runCtx, store, job)
+	outputArtifacts, err := prepareServerOutputArtifacts(job)
 	if err != nil {
 		return err
 	}
-	resultPayload, acceptedResult, err := runNativeServerNode(runCtx, job, inputContext)
+	inputContext, err := buildServerExecutionContext(runCtx, store, job, outputArtifacts)
+	if err != nil {
+		return err
+	}
+	resultPayload, err := runNativeServerNode(runCtx, job, inputContext)
+	if err != nil {
+		return err
+	}
+	finalizedArtifacts, err := finalizeServerOutputArtifacts(outputArtifacts)
+	if err != nil {
+		return err
+	}
+	if len(finalizedArtifacts) > 0 {
+		resultPayload["artifacts"] = artifactMetadataMap(finalizedArtifacts)
+	}
+	acceptedResult, err := hashResultPayload(resultPayload)
 	if err != nil {
 		return err
 	}
@@ -65,6 +82,7 @@ func buildServerExecutionContext(
 	ctx context.Context,
 	store *postgres.Store,
 	job scheduler.Job,
+	outputArtifacts []scheduler.WorkflowArtifact,
 ) (map[string]any, error) {
 	args := append([]any(nil), job.Args...)
 	inputs := make(map[string]map[string]any, len(job.Dependencies))
@@ -81,24 +99,44 @@ func buildServerExecutionContext(
 	}
 
 	return map[string]any{
-		"args":   args,
-		"inputs": inputs,
+		"args":             args,
+		"inputs":           inputs,
+		"artifacts":        serverArtifactContext(job.Artifacts),
+		"output_artifacts": serverArtifactContext(outputArtifacts),
 	}, nil
+}
+
+func serverArtifactContext(artifacts []scheduler.WorkflowArtifact) map[string]any {
+	if len(artifacts) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(artifacts))
+	for _, artifact := range artifacts {
+		out[artifact.ID] = map[string]any{
+			"id":           artifact.ID,
+			"path":         artifact.LocalPath,
+			"url":          artifact.URL,
+			"size":         artifact.Size,
+			"sha256":       artifact.SHA256,
+			"content_type": artifact.ContentType,
+		}
+	}
+	return out
 }
 
 func runNativeServerNode(
 	ctx context.Context,
 	job scheduler.Job,
 	inputContext map[string]any,
-) (map[string]any, string, error) {
+) (map[string]any, error) {
 	inputBytes, err := json.Marshal(inputContext)
 	if err != nil {
-		return nil, "", fmt.Errorf("marshal server execution input: %w", err)
+		return nil, fmt.Errorf("marshal server execution input: %w", err)
 	}
 
 	binaryPath, err := nativeExecutablePathFromWasmURL(job.WasmURL)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	cmd := exec.CommandContext(ctx, binaryPath)
@@ -115,14 +153,14 @@ func runNativeServerNode(
 			msg = strings.TrimSpace(stdout.String())
 		}
 		if msg == "" {
-			return nil, "", fmt.Errorf("server native node failed: %w", err)
+			return nil, fmt.Errorf("server native node failed: %w", err)
 		}
-		return nil, "", fmt.Errorf("server native node failed: %w: %s", err, msg)
+		return nil, fmt.Errorf("server native node failed: %w: %s", err, msg)
 	}
 
 	var output any
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
-		return nil, "", fmt.Errorf("decode native node output: %w", err)
+		return nil, fmt.Errorf("decode native node output: %w", err)
 	}
 
 	resultPayload := map[string]any{
@@ -130,8 +168,86 @@ func runNativeServerNode(
 		"output": output,
 	}
 
-	sum := sha256.Sum256(stdout.Bytes())
-	return resultPayload, hex.EncodeToString(sum[:]), nil
+	return resultPayload, nil
+}
+
+func prepareServerOutputArtifacts(job scheduler.Job) ([]scheduler.WorkflowArtifact, error) {
+	if len(job.OutputArtifacts) == 0 {
+		return nil, nil
+	}
+	out := make([]scheduler.WorkflowArtifact, 0, len(job.OutputArtifacts))
+	for _, artifact := range job.OutputArtifacts {
+		localPath, err := outputArtifactLocalPath(job.WorkflowID, job.NodeID, artifact.Path)
+		if err != nil {
+			return nil, fmt.Errorf("prepare output artifact %s: %w", artifact.ID, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+			return nil, fmt.Errorf("create output artifact dir %s: %w", artifact.ID, err)
+		}
+		if err := os.Remove(localPath); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("clear stale output artifact %s: %w", artifact.ID, err)
+		}
+		contentType := strings.TrimSpace(artifact.ContentType)
+		if contentType == "" {
+			contentType = mime.TypeByExtension(filepath.Ext(localPath))
+		}
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		artifact.LocalPath = localPath
+		artifact.URL = outputWorkflowArtifactURL(job.WorkflowID, job.NodeID, artifact.ID)
+		artifact.ContentType = contentType
+		out = append(out, artifact)
+	}
+	return out, nil
+}
+
+func finalizeServerOutputArtifacts(artifacts []scheduler.WorkflowArtifact) ([]scheduler.WorkflowArtifact, error) {
+	if len(artifacts) == 0 {
+		return nil, nil
+	}
+	out := make([]scheduler.WorkflowArtifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		info, err := os.Stat(artifact.LocalPath)
+		if err != nil {
+			return nil, fmt.Errorf("output artifact %s was not written: %w", artifact.ID, err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("output artifact %s is a directory", artifact.ID)
+		}
+		sum, err := sha256File(artifact.LocalPath)
+		if err != nil {
+			return nil, fmt.Errorf("hash output artifact %s: %w", artifact.ID, err)
+		}
+		artifact.Size = info.Size()
+		artifact.SHA256 = sum
+		out = append(out, artifact)
+	}
+	return out, nil
+}
+
+func artifactMetadataMap(artifacts []scheduler.WorkflowArtifact) map[string]any {
+	out := make(map[string]any, len(artifacts))
+	for _, artifact := range artifacts {
+		out[artifact.ID] = map[string]any{
+			"id":           artifact.ID,
+			"path":         artifact.Path,
+			"url":          artifact.URL,
+			"size":         artifact.Size,
+			"sha256":       artifact.SHA256,
+			"content_type": artifact.ContentType,
+		}
+	}
+	return out
+}
+
+func hashResultPayload(payload map[string]any) (string, error) {
+	bytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("hash result payload: %w", err)
+	}
+	sum := sha256.Sum256(bytes)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func persistServerJobCompletion(

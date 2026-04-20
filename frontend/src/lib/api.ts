@@ -18,6 +18,15 @@ export type DependencyRef = {
   node_id: string;
 };
 
+export type WorkflowArtifact = {
+  id: string;
+  path?: string;
+  url?: string;
+  size?: number;
+  sha256?: string;
+  content_type?: string;
+};
+
 export type Assignment = {
   job_id: string;
   workflow_id: string;
@@ -25,6 +34,8 @@ export type Assignment = {
   wasm_url: string;
   args?: unknown[];
   dependencies?: DependencyRef[];
+  artifacts?: WorkflowArtifact[];
+  output_artifacts?: WorkflowArtifact[];
   [key: string]: unknown;
 };
 
@@ -66,6 +77,8 @@ export type RuntimeWorkflowNode = {
   reward_usdc: string;
   completed: boolean;
   enqueued: boolean;
+  uses_artifacts?: string[];
+  output_artifacts?: WorkflowArtifact[];
   replication_factor?: number;
   acceptance_policy?: "consensus" | "collect_all";
   traits?: string[];

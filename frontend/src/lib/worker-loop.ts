@@ -1,6 +1,7 @@
 import {
   type Assignment,
   type DependencyRef,
+  type WorkflowArtifact,
   fetchWorkflowNodeOutputChunk,
   fetchWorkflowNodeOutput,
   type JsonObject,
@@ -36,6 +37,7 @@ type SyntheticMode = "emit_big_array" | "consume_big_array";
 type ExecutionContext = {
   args: unknown[];
   inputs: Record<string, JsonObject>;
+  artifacts: Record<string, WorkflowArtifact>;
 };
 
 type DependencyChunkMode = "array" | "string" | "json" | "missing";
@@ -398,6 +400,7 @@ async function buildExecutionContext(
     return {
       args,
       inputs: inputPayloads,
+      artifacts: assignmentArtifactsByID(assignment.artifacts),
     };
   }
 
@@ -420,7 +423,22 @@ async function buildExecutionContext(
   return {
     args,
     inputs: inputPayloads,
+    artifacts: assignmentArtifactsByID(assignment.artifacts),
   };
+}
+
+function assignmentArtifactsByID(artifacts: Assignment["artifacts"]): Record<string, WorkflowArtifact> {
+  const out: Record<string, WorkflowArtifact> = {};
+  if (!Array.isArray(artifacts)) {
+    return out;
+  }
+  for (const artifact of artifacts) {
+    if (!artifact || typeof artifact.id !== "string" || artifact.id.trim() === "") {
+      continue;
+    }
+    out[artifact.id] = artifact;
+  }
+  return out;
 }
 
 export async function runWorkerOnce(deps: RunOnceDeps): Promise<void> {

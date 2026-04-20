@@ -57,6 +57,8 @@ type Job struct {
 	ExecutionTarget   ExecutionTarget             `json:"execution_target,omitempty"`
 	Args              []any                       `json:"args,omitempty"`
 	Dependencies      []DependencyRef             `json:"dependencies,omitempty"`
+	Artifacts         []WorkflowArtifact          `json:"artifacts,omitempty"`
+	OutputArtifacts   []WorkflowArtifact          `json:"output_artifacts,omitempty"`
 	ResultSchema      map[string]PayloadFieldRule `json:"result_schema,omitempty"`
 	RewardUSDC        string                      `json:"reward_usdc"`
 	ReplicationFactor int                         `json:"replication_factor,omitempty"`
@@ -67,6 +69,16 @@ type Job struct {
 type DependencyRef struct {
 	WorkflowID string `json:"workflow_id"`
 	NodeID     string `json:"node_id"`
+}
+
+type WorkflowArtifact struct {
+	ID          string `json:"id"`
+	Path        string `json:"path,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	LocalPath   string `json:"-"`
 }
 
 type PayloadFieldRule struct {

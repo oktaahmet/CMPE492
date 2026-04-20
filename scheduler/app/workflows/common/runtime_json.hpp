@@ -6,6 +6,135 @@
 
 namespace runtime_json {
 
+class JsonWriter {
+  public:
+    JsonWriter(char* out, int cap) : out_(out), cap_(cap), len_(0), first_(true), failed_(false) {
+        if (!out_ || cap_ <= 0) {
+            failed_ = true;
+        }
+    }
+
+    void begin_object() {
+        append_char('{');
+        first_ = true;
+    }
+
+    int end_object() {
+        append_char('}');
+        if (failed_) {
+            if (out_ && cap_ > 0) {
+                out_[0] = '\0';
+            }
+            return 0;
+        }
+        if (len_ < cap_) {
+            out_[len_] = '\0';
+        }
+        return len_;
+    }
+
+    void field(const char* key, bool value) {
+        key_prefix(key);
+        append(value ? "true" : "false");
+    }
+
+    void field(const char* key, int value) {
+        key_prefix(key);
+        append_int(value);
+    }
+
+    void field(const char* key, long long value) {
+        key_prefix(key);
+        append_int(value);
+    }
+
+    void field(const char* key, const char* value) {
+        key_prefix(key);
+        append_quoted(value ? value : "");
+    }
+
+    bool ok() const { return !failed_; }
+
+  private:
+    char* out_;
+    int cap_;
+    int len_;
+    bool first_;
+    bool failed_;
+
+    void append_char(char value) {
+        if (failed_) {
+            return;
+        }
+        if (len_ + 1 >= cap_) {
+            failed_ = true;
+            return;
+        }
+        out_[len_++] = value;
+    }
+
+    void append(const char* value) {
+        if (!value) {
+            return;
+        }
+        while (*value) {
+            append_char(*value++);
+        }
+    }
+
+    void append_int(long long value) {
+        char buf[32];
+        int n = 0;
+        if (value == 0) {
+            append_char('0');
+            return;
+        }
+        unsigned long long magnitude = 0;
+        if (value < 0) {
+            append_char('-');
+            magnitude = static_cast<unsigned long long>(-(value + 1)) + 1ULL;
+        } else {
+            magnitude = static_cast<unsigned long long>(value);
+        }
+        while (magnitude > 0 && n < static_cast<int>(sizeof(buf))) {
+            buf[n++] = static_cast<char>('0' + (magnitude % 10ULL));
+            magnitude /= 10ULL;
+        }
+        while (n > 0) {
+            append_char(buf[--n]);
+        }
+    }
+
+    void append_quoted(const char* value) {
+        append_char('"');
+        while (value && *value) {
+            const char c = *value++;
+            if (c == '"' || c == '\\') {
+                append_char('\\');
+                append_char(c);
+            } else if (c == '\n') {
+                append("\\n");
+            } else if (c == '\r') {
+                append("\\r");
+            } else if (c == '\t') {
+                append("\\t");
+            } else {
+                append_char(c);
+            }
+        }
+        append_char('"');
+    }
+
+    void key_prefix(const char* key) {
+        if (!first_) {
+            append_char(',');
+        }
+        first_ = false;
+        append_quoted(key ? key : "");
+        append_char(':');
+    }
+};
+
 inline int extract_ints(const char* data, int len, long long* out, int max_out) {
     int found = 0;
     int i = 0;

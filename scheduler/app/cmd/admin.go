@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -535,6 +539,10 @@ func prepareWorkflowLoad(
 			return scheduler.WorkflowSpec{}, nil, err
 		}
 	}
+	normalized, err = hydrateWorkflowArtifacts(normalized, path)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, nil, err
+	}
 	if err := ensureWorkflowArtifacts(normalized, path); err != nil {
 		return scheduler.WorkflowSpec{}, nil, err
 	}
@@ -544,6 +552,125 @@ func prepareWorkflowLoad(
 		return scheduler.WorkflowSpec{}, nil, err
 	}
 	return normalized, completedOutputs, nil
+}
+
+func hydrateWorkflowArtifacts(spec scheduler.WorkflowSpec, specPath string) (scheduler.WorkflowSpec, error) {
+	if len(spec.Artifacts) == 0 {
+		return spec, nil
+	}
+
+	baseDir := filepath.Dir(specPath)
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, err
+	}
+
+	out := spec
+	out.Artifacts = make([]scheduler.WorkflowArtifact, 0, len(spec.Artifacts))
+	for _, artifact := range spec.Artifacts {
+		localPath := filepath.Join(absBase, filepath.FromSlash(artifact.Path))
+		absPath, err := filepath.Abs(localPath)
+		if err != nil {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s path invalid: %w", artifact.ID, err)
+		}
+		inside, err := pathInsideDir(absPath, absBase)
+		if err != nil {
+			return scheduler.WorkflowSpec{}, err
+		}
+		if !inside {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s path escapes workflow folder", artifact.ID)
+		}
+		info, err := os.Stat(absPath)
+		if err != nil {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s not found: %w", artifact.ID, err)
+		}
+		if info.IsDir() {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s must be a file", artifact.ID)
+		}
+		sum, err := sha256File(absPath)
+		if err != nil {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s hash failed: %w", artifact.ID, err)
+		}
+		contentType := strings.TrimSpace(artifact.ContentType)
+		if contentType == "" {
+			contentType = mime.TypeByExtension(filepath.Ext(absPath))
+		}
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		artifact.LocalPath = absPath
+		artifact.Size = info.Size()
+		artifact.SHA256 = sum
+		artifact.ContentType = contentType
+		artifact.URL = workflowArtifactURL(spec.ID, artifact.ID)
+		out.Artifacts = append(out.Artifacts, artifact)
+	}
+	return out, nil
+}
+
+func sha256File(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func workflowArtifactURL(workflowID, artifactID string) string {
+	q := url.Values{}
+	q.Set("workflow_id", workflowID)
+	q.Set("artifact_id", artifactID)
+	return "/api/workflow/artifact?" + q.Encode()
+}
+
+func outputWorkflowArtifactURL(workflowID, nodeID, artifactID string) string {
+	q := url.Values{}
+	q.Set("workflow_id", workflowID)
+	q.Set("node_id", nodeID)
+	q.Set("artifact_id", artifactID)
+	return "/api/workflow/artifact?" + q.Encode()
+}
+
+func outputArtifactLocalPath(workflowID, nodeID, artifactPath string) (string, error) {
+	workflowID = strings.TrimSpace(workflowID)
+	nodeID = strings.TrimSpace(nodeID)
+	artifactPath = strings.TrimSpace(strings.ReplaceAll(artifactPath, "\\", "/"))
+	if !isSafeWorkflowID(workflowID) || !isSafeWorkflowID(nodeID) {
+		return "", fmt.Errorf("workflow_id or node_id is invalid")
+	}
+	if artifactPath == "" {
+		return "", fmt.Errorf("artifact path is required")
+	}
+
+	cleaned := path.Clean(artifactPath)
+	if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." || path.IsAbs(cleaned) {
+		return "", fmt.Errorf("artifact path must be relative and stay inside output artifact folder")
+	}
+
+	base := filepath.Join("workflow-data", "artifacts", workflowID, nodeID)
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	localPath := filepath.Join(absBase, filepath.FromSlash(cleaned))
+	absPath, err := filepath.Abs(localPath)
+	if err != nil {
+		return "", err
+	}
+	inside, err := pathInsideDir(absPath, absBase)
+	if err != nil {
+		return "", err
+	}
+	if !inside {
+		return "", fmt.Errorf("artifact path escapes output artifact folder")
+	}
+	return absPath, nil
 }
 
 func readWorkflowSpecFromPath(path string) (scheduler.WorkflowSpec, error) {
