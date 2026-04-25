@@ -55,7 +55,7 @@ func (s *Store) Ping(ctx context.Context) error {
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
-	stmts := []string{
+	statements := []string{
 		`
 		CREATE TABLE IF NOT EXISTS workflow_node_state (
 			workflow_id TEXT NOT NULL,
@@ -69,7 +69,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 			PRIMARY KEY (workflow_id, node_id)
 		)
 		`,
-		`CREATE INDEX IF NOT EXISTS idx_workflow_node_state_workflow_id ON workflow_node_state(workflow_id)`,
 		`
 		CREATE TABLE IF NOT EXISTS payment_events (
 			id TEXT PRIMARY KEY,
@@ -88,7 +87,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)
 		`,
-		`CREATE INDEX IF NOT EXISTS idx_payment_events_status ON payment_events(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_payment_events_worker_updated ON payment_events(worker_id, updated_at DESC, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_payment_events_pending_order ON payment_events(updated_at ASC, created_at ASC) WHERE status IN ('pending_x402_transfer', 'retry', 'processing_x402_transfer')`,
 		`
 		CREATE TABLE IF NOT EXISTS scheduler_meta (
 			key TEXT PRIMARY KEY,
@@ -98,12 +98,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`,
 	}
 
-	for _, stmt := range stmts {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -147,6 +146,7 @@ func (s *Store) UpsertWorkflowNodeCompletion(
 		finalized_at = EXCLUDED.finalized_at,
 		updated_at = NOW()
 	`
+
 	_, err = s.db.ExecContext(
 		ctx,
 		q,
@@ -171,6 +171,7 @@ func (s *Store) LoadWorkflowCompletedOutputs(ctx context.Context, workflowID str
 	FROM workflow_node_state
 	WHERE workflow_id = $1
 	`
+
 	rows, err := s.db.QueryContext(ctx, q, workflowID)
 	if err != nil {
 		return nil, err
@@ -253,6 +254,7 @@ func (s *Store) LoadWorkflowNodeOutput(
 	FROM workflow_node_state
 	WHERE workflow_id = $1 AND node_id = $2
 	`
+
 	var raw []byte
 	if err := s.db.QueryRowContext(ctx, q, workflowID, nodeID).Scan(&raw); err != nil {
 		if err == sql.ErrNoRows {
@@ -331,7 +333,6 @@ func (s *Store) UpsertPaymentEvents(ctx context.Context, events []scheduler.Paym
 			return err
 		}
 	}
-
 	return tx.Commit()
 }
 
@@ -343,21 +344,14 @@ SELECT
 FROM payment_events
 `
 
-func (s *Store) ListPaymentEvents(ctx context.Context, workerID string) ([]scheduler.PaymentEvent, error) {
+func (s *Store) ListPaymentEventsForWorker(ctx context.Context, workerID string) ([]scheduler.PaymentEvent, error) {
 	workerID = strings.TrimSpace(workerID)
-
-	const qAll = listPaymentEventsSelect + `ORDER BY updated_at DESC, created_at DESC`
-	const qByWorker = listPaymentEventsSelect + `WHERE worker_id = $1 ORDER BY updated_at DESC, created_at DESC`
-
-	var (
-		rows *sql.Rows
-		err  error
-	)
 	if workerID == "" {
-		rows, err = s.db.QueryContext(ctx, qAll)
-	} else {
-		rows, err = s.db.QueryContext(ctx, qByWorker, workerID)
+		return nil, fmt.Errorf("worker_id is required")
 	}
+	const q = listPaymentEventsSelect + `WHERE worker_id = $1 ORDER BY updated_at DESC, created_at DESC`
+
+	rows, err := s.db.QueryContext(ctx, q, workerID)
 	if err != nil {
 		return nil, err
 	}
@@ -382,6 +376,7 @@ func (s *Store) ListPendingPaymentEvents(ctx context.Context) ([]scheduler.Payme
 	WHERE status = 'pending_x402_transfer' OR status = 'retry' OR status = 'processing_x402_transfer'
 	ORDER BY updated_at ASC, created_at ASC
 	`
+
 	rows, err := s.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
@@ -449,6 +444,7 @@ func (s *Store) setMetaValue(ctx context.Context, key string, value string) erro
 	ON CONFLICT (key) DO UPDATE
 	SET value = EXCLUDED.value, updated_at = NOW()
 	`
+
 	_, err := s.db.ExecContext(ctx, q, key, value)
 	return err
 }

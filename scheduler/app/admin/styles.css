@@ -1,0 +1,458 @@
+:root {
+  --background: #ffffff;
+  --foreground: #18181b;
+  --card: rgba(255, 255, 255, 0.88);
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --border: rgba(24, 24, 27, 0.11);
+  --input: rgba(24, 24, 27, 0.12);
+  --ring: rgba(24, 24, 27, 0.24);
+  --primary: #18181b;
+  --primary-hover: #27272a;
+  --secondary: #f4f4f5;
+  --secondary-hover: #ececef;
+  --destructive: #dc2626;
+  --radius: 24px;
+  font-family:
+    "Nunito Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+}
+
+@font-face {
+  font-family: "Nunito Sans";
+  font-style: normal;
+  font-weight: 200 1000;
+  font-display: swap;
+  src: url("/admin/fonts/nunito-sans-latin-wght-normal.woff2") format("woff2");
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(34, 211, 238, 0.18), transparent 28rem),
+    radial-gradient(circle at 100% 10%, rgba(250, 204, 21, 0.13), transparent 30rem),
+    linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
+  color: var(--foreground);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.shell {
+  width: min(92rem, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 22px 0;
+}
+
+.top-card,
+.panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.04);
+  backdrop-filter: blur(14px);
+}
+
+.top-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 76px;
+  padding: 18px 22px;
+}
+
+h1,
+h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.title-icon,
+.section-icon {
+  display: inline-flex;
+  width: 25px;
+  justify-content: center;
+  color: var(--foreground);
+  font-weight: 500;
+  line-height: 1;
+}
+
+.section-icon {
+  width: 20px;
+  font-size: 18px;
+}
+
+.top-actions,
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  border-radius: 999px;
+  padding: 0 12px;
+  background: var(--secondary);
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.badge.outline {
+  border: 1px solid var(--border);
+  background: rgba(244, 244, 245, 0.62);
+}
+
+.badge.unlocked {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.panel {
+  margin-top: 12px;
+  overflow: hidden;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 54px;
+  padding: 16px 22px 8px;
+}
+
+.panel-kicker {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-form,
+.file-grid,
+.control-grid,
+.actions,
+.check-row,
+.file-list {
+  margin-right: 22px;
+  margin-left: 22px;
+}
+
+.auth-form {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+
+.field {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.auth-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.field span,
+.file-drop span {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+input[type="password"],
+select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--input);
+  border-radius: 999px;
+  padding: 0 15px;
+  background: rgba(244, 244, 245, 0.72);
+  color: var(--foreground);
+  outline: none;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
+}
+
+input[type="password"]:focus,
+select:focus {
+  border-color: var(--ring);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.08);
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 3px solid rgba(24, 24, 27, 0.16);
+  outline-offset: 2px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.workspace .panel {
+  margin-top: 0;
+}
+
+.file-grid,
+.control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.file-drop {
+  position: relative;
+  display: grid;
+  min-height: 92px;
+  align-content: center;
+  gap: 10px;
+  border: 1px dashed rgba(24, 24, 27, 0.16);
+  border-radius: 22px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.file-drop input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.file-control {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 32px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 12px;
+  background: var(--secondary);
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.file-list {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  max-height: 78px;
+  overflow: auto;
+  padding: 0;
+  list-style: none;
+  margin-top: 10px;
+  margin-bottom: 0;
+}
+
+.file-list li {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 9px 12px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted-foreground);
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 16px;
+}
+
+.check-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+}
+
+.actions {
+  margin-top: 16px;
+  margin-bottom: 20px;
+}
+
+.compact-actions {
+  justify-content: flex-end;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0 14px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.09);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
+  box-shadow: none;
+}
+
+.primary {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.primary:hover {
+  background: var(--primary-hover);
+}
+
+.secondary {
+  border-color: var(--border);
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.secondary:hover {
+  background: var(--secondary-hover);
+}
+
+.ghost {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.42);
+  color: var(--foreground);
+}
+
+.ghost:hover {
+  background: #ffffff;
+}
+
+.danger-text {
+  color: var(--destructive);
+}
+
+.output-panel pre {
+  min-height: 180px;
+  max-height: 460px;
+  margin: 10px 22px 22px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(244, 244, 245, 0.72);
+  color: var(--foreground);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 860px) {
+  .shell {
+    width: min(100% - 20px, 92rem);
+    padding: 20px 0;
+  }
+
+  .top-card {
+    min-height: 0;
+    padding: 24px;
+  }
+
+  .auth-form,
+  .workspace,
+  .file-grid,
+  .control-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-title {
+    font-size: 19px;
+  }
+
+  .button {
+    width: 100%;
+  }
+
+  .actions {
+    align-items: stretch;
+  }
+
+  .top-actions,
+  .actions {
+    width: 100%;
+  }
+}

@@ -3,7 +3,7 @@
   "nodes": [
     {
       "id": "fetch-queueing-metadata",
-      "wasm_url": "/example-11/fetch_queueing_metadata.wasm?v=1",
+      "program": "fetch_queueing_metadata.cpp",
       "execution_target": "browser_worker",
       "args": [
         {
@@ -13,16 +13,20 @@
       ],
       "replication_factor": 2,
       "acceptance_policy": "consensus",
-      "traits": ["network", "deterministic"],
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.04"
     },
     {
       "id": "derive-baseline-config",
-      "depends_on": ["fetch-queueing-metadata"],
-      "wasm_url": "/example-11/derive_baseline_config.wasm?v=1",
+      "depends_on": [
+        "fetch-queueing-metadata"
+      ],
+      "program": "derive_baseline_config.cpp",
       "execution_target": "server",
       "args": [
         {
@@ -34,16 +38,20 @@
         }
       ],
       "replication_factor": 1,
-      "traits": ["config", "bridge"],
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.00"
     },
     {
       "id": "run-baseline-simulations",
-      "depends_on": ["derive-baseline-config"],
-      "wasm_url": "/example-11/simulate_adaptive_queue.wasm?v=1",
+      "depends_on": [
+        "derive-baseline-config"
+      ],
+      "program": "simulate_adaptive_queue.cpp",
       "execution_target": "browser_worker",
       "args": [
         {
@@ -57,16 +65,21 @@
       ],
       "replication_factor": 4,
       "acceptance_policy": "collect_all",
-      "traits": ["simulation", "stochastic"],
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.05"
     },
     {
       "id": "summarize-baseline",
-      "depends_on": ["derive-baseline-config", "run-baseline-simulations"],
-      "wasm_url": "/example-11/summarize_baseline.wasm?v=1",
+      "depends_on": [
+        "derive-baseline-config",
+        "run-baseline-simulations"
+      ],
+      "program": "summarize_baseline.cpp",
       "execution_target": "server",
       "args": [
         {
@@ -77,16 +90,20 @@
         }
       ],
       "replication_factor": 1,
-      "traits": ["reducer", "bridge"],
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.00"
     },
     {
       "id": "fetch-reference-load-signal",
-      "depends_on": ["summarize-baseline"],
-      "wasm_url": "/example-11/fetch_reference_load_signal.wasm?v=1",
+      "depends_on": [
+        "summarize-baseline"
+      ],
+      "program": "fetch_reference_load_signal.cpp",
       "execution_target": "browser_worker",
       "args": [
         {
@@ -96,16 +113,21 @@
       ],
       "replication_factor": 2,
       "acceptance_policy": "consensus",
-      "traits": ["network", "deterministic"],
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.04"
     },
     {
       "id": "run-stress-simulations",
-      "depends_on": ["summarize-baseline", "fetch-reference-load-signal"],
-      "wasm_url": "/example-11/simulate_adaptive_queue.wasm?v=1",
+      "depends_on": [
+        "summarize-baseline",
+        "fetch-reference-load-signal"
+      ],
+      "program": "simulate_adaptive_queue.cpp",
       "execution_target": "browser_worker",
       "args": [
         {
@@ -119,9 +141,11 @@
       ],
       "replication_factor": 5,
       "acceptance_policy": "collect_all",
-      "traits": ["simulation", "stochastic", "stress"],
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.06"
     },
@@ -133,7 +157,7 @@
         "fetch-reference-load-signal",
         "run-stress-simulations"
       ],
-      "wasm_url": "/example-11/build_final_report.wasm?v=1",
+      "program": "build_final_report.cpp",
       "execution_target": "server",
       "args": [
         {
@@ -141,9 +165,11 @@
         }
       ],
       "replication_factor": 1,
-      "traits": ["report", "aggregation"],
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.00"
     }

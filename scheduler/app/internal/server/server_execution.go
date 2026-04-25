@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -113,12 +113,11 @@ func serverArtifactContext(artifacts []scheduler.WorkflowArtifact) map[string]an
 	out := make(map[string]any, len(artifacts))
 	for _, artifact := range artifacts {
 		out[artifact.ID] = map[string]any{
-			"id":           artifact.ID,
-			"path":         artifact.LocalPath,
-			"url":          artifact.URL,
-			"size":         artifact.Size,
-			"sha256":       artifact.SHA256,
-			"content_type": artifact.ContentType,
+			"id":     artifact.ID,
+			"path":   artifact.LocalPath,
+			"url":    artifact.URL,
+			"size":   artifact.Size,
+			"sha256": artifact.SHA256,
 		}
 	}
 	return out
@@ -230,12 +229,11 @@ func artifactMetadataMap(artifacts []scheduler.WorkflowArtifact) map[string]any 
 	out := make(map[string]any, len(artifacts))
 	for _, artifact := range artifacts {
 		out[artifact.ID] = map[string]any{
-			"id":           artifact.ID,
-			"path":         artifact.Path,
-			"url":          artifact.URL,
-			"size":         artifact.Size,
-			"sha256":       artifact.SHA256,
-			"content_type": artifact.ContentType,
+			"id":     artifact.ID,
+			"path":   artifact.Path,
+			"url":    artifact.URL,
+			"size":   artifact.Size,
+			"sha256": artifact.SHA256,
 		}
 	}
 	return out

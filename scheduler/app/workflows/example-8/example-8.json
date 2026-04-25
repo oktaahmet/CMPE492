@@ -3,28 +3,36 @@
   "nodes": [
     {
       "id": "emit-text",
-      "wasm_url": "/example-8/emit_text.wasm?v=1",
+      "program": "emit_text.cpp",
       "args": [
         {
           "repeat": 8
         }
       ],
       "result_schema": {
-        "output": { "type": "string", "required": true }
+        "output": {
+          "type": "string",
+          "required": true
+        }
       },
       "reward_usdc": "0.05"
     },
     {
       "id": "summarize-text",
-      "depends_on": ["emit-text"],
-      "wasm_url": "/example-8/summarize_text.wasm?v=1",
+      "depends_on": [
+        "emit-text"
+      ],
+      "program": "summarize_text.cpp",
       "args": [
         {
           "passes": 2
         }
       ],
       "result_schema": {
-        "output": { "type": "string", "required": true }
+        "output": {
+          "type": "string",
+          "required": true
+        }
       },
       "reward_usdc": "0.08"
     }
