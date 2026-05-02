@@ -1,0 +1,208 @@
+{
+  "id": "wf-full-system-capability-015",
+  "artifacts": [
+    {
+      "id": "load-profile",
+      "file": "load_profile.csv"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "fetch-public-signal",
+      "priority": 100,
+      "program": "fetch_signal.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "url": "https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&titles=Discrete_event_simulation&prop=extracts&exintro=1&explaintext=1",
+          "timeout_ms": 3000
+        }
+      ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.04"
+    },
+    {
+      "id": "read-load-profile",
+      "priority": 90,
+      "program": "read_load_profile.cpp",
+      "execution_target": "browser_worker",
+      "uses_artifacts": [
+        "load-profile"
+      ],
+      "args": [
+        {
+          "timeout_ms": 3000
+        }
+      ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.04"
+    },
+    {
+      "id": "simulate-baseline",
+      "depends_on": [
+        "fetch-public-signal",
+        "read-load-profile"
+      ],
+      "priority": 80,
+      "program": "simulate_queue.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "scenario": "baseline",
+          "customers": 520,
+          "service_ms": 74,
+          "arrival_ms": 96,
+          "replications": 18
+        }
+      ],
+      "replication_factor": 3,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.05"
+    },
+    {
+      "id": "simulate-stress",
+      "depends_on": [
+        "fetch-public-signal",
+        "read-load-profile"
+      ],
+      "priority": 75,
+      "program": "simulate_queue.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "scenario": "stress",
+          "customers": 760,
+          "service_ms": 92,
+          "arrival_ms": 63,
+          "replications": 22
+        }
+      ],
+      "replication_factor": 3,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.06"
+    },
+    {
+      "id": "generate-audit-trace",
+      "priority": 50,
+      "program": "generate_large_trace.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "target_chars": 230000
+        }
+      ],
+      "replication_factor": 2,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.04"
+    },
+    {
+      "id": "aggregate-simulations",
+      "depends_on": [
+        "fetch-public-signal",
+        "generate-audit-trace",
+        "read-load-profile",
+        "simulate-baseline",
+        "simulate-stress"
+      ],
+      "priority": 40,
+      "program": "aggregate_runs.cpp",
+      "execution_target": "server",
+      "output_artifacts": [
+        {
+          "id": "simulation-report",
+          "file": "simulation_report.txt"
+        }
+      ],
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    },
+    {
+      "id": "score-policy",
+      "depends_on": [
+        "aggregate-simulations"
+      ],
+      "priority": 30,
+      "program": "score_policy.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "target_wait_ms": 850
+        }
+      ],
+      "replication_factor": 3,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.03"
+    },
+    {
+      "id": "final-brief",
+      "depends_on": [
+        "aggregate-simulations",
+        "score-policy"
+      ],
+      "priority": 20,
+      "program": "final_brief.cpp",
+      "execution_target": "server",
+      "args": [
+        {
+          "title": "Full system workflow capability run"
+        }
+      ],
+      "output_artifacts": [
+        {
+          "id": "final-brief",
+          "file": "final_brief.txt"
+        }
+      ],
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    }
+  ]
+}

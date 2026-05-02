@@ -41,15 +41,15 @@ func TestEngineSubmitResultFinalizesOnQuorumAndCreatesPaymentEvents(t *testing.T
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 3,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	job := Job{
-		ID:         "job-finalize",
-		WorkflowID: "wf",
-		NodeID:     "n1",
-		WasmURL:    "/job.wasm",
-		RewardUSDC: "0.25",
+		ID:                "job-finalize",
+		WorkflowID:        "wf",
+		NodeID:            "n1",
+		WasmURL:           "/job.wasm",
+		RewardUSDC:        "0.25",
+		ReplicationFactor: 3,
 		ResultSchema: map[string]PayloadFieldRule{
 			"output": {Type: "number", Required: true},
 		},
@@ -126,15 +126,15 @@ func TestEngineSubmitResultUsesCanonicalPayloadForConsensus(t *testing.T) {
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 3,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	job := Job{
-		ID:         "job-consensus",
-		WorkflowID: "wf",
-		NodeID:     "n1",
-		WasmURL:    "/job.wasm",
-		RewardUSDC: "0.25",
+		ID:                "job-consensus",
+		WorkflowID:        "wf",
+		NodeID:            "n1",
+		WasmURL:           "/job.wasm",
+		RewardUSDC:        "0.25",
+		ReplicationFactor: 3,
 		ResultSchema: map[string]PayloadFieldRule{
 			"output": {Type: "number", Required: true},
 		},
@@ -198,15 +198,15 @@ func TestEngineSubmitResultResetsRoundAfterSplitDecision(t *testing.T) {
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 3,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	job := Job{
-		ID:         "job-split",
-		WorkflowID: "wf",
-		NodeID:     "n1",
-		WasmURL:    "/job.wasm",
-		RewardUSDC: "0.1",
+		ID:                "job-split",
+		WorkflowID:        "wf",
+		NodeID:            "n1",
+		WasmURL:           "/job.wasm",
+		RewardUSDC:        "0.1",
+		ReplicationFactor: 3,
 	}
 	if err := engine.Enqueue(job); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
@@ -257,15 +257,15 @@ func TestEngineSubmitResultRejectsUnassignedAndIgnoresDuplicateOrLateSubmit(t *t
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 2,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	job := Job{
-		ID:         "job-negative-submit",
-		WorkflowID: "wf",
-		NodeID:     "n1",
-		WasmURL:    "/job.wasm",
-		RewardUSDC: "0.1",
+		ID:                "job-negative-submit",
+		WorkflowID:        "wf",
+		NodeID:            "n1",
+		WasmURL:           "/job.wasm",
+		RewardUSDC:        "0.1",
+		ReplicationFactor: 2,
 	}
 	if err := engine.Enqueue(job); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
@@ -346,8 +346,7 @@ func TestEngineUsesJobSpecificReplicationFactor(t *testing.T) {
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 3,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	job := Job{
 		ID:                "job-per-node-replication",
@@ -402,8 +401,7 @@ func TestEngineCollectAllFinalizesAfterAllReplicasAndStoresSamples(t *testing.T)
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 3,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	job := Job{
 		ID:                "job-collect-all",

@@ -206,6 +206,55 @@ inline long long extract_named_int(const char* data, int len, const char* key, l
     return fallback;
 }
 
+inline int extract_named_ints(const char* data, int len, const char* key, long long* out, int max_out) {
+    if (!data || len <= 0 || !key || !out || max_out <= 0) {
+        return 0;
+    }
+    const int key_len = static_cast<int>(std::strlen(key));
+    int found = 0;
+    for (int i = 0; i + key_len + 3 < len && found < max_out; ++i) {
+        if (data[i] != '"') {
+            continue;
+        }
+        bool match = true;
+        for (int j = 0; j < key_len; ++j) {
+            if (data[i + 1 + j] != key[j]) {
+                match = false;
+                break;
+            }
+        }
+        if (!match || data[i + 1 + key_len] != '"') {
+            continue;
+        }
+        int k = i + 1 + key_len + 1;
+        while (k < len && data[k] != ':') {
+            ++k;
+        }
+        if (k >= len) {
+            continue;
+        }
+        ++k;
+        while (k < len && std::isspace(static_cast<unsigned char>(data[k]))) {
+            ++k;
+        }
+        int sign = 1;
+        if (k < len && data[k] == '-') {
+            sign = -1;
+            ++k;
+        }
+        if (k >= len || !std::isdigit(static_cast<unsigned char>(data[k]))) {
+            continue;
+        }
+        long long value = 0;
+        while (k < len && std::isdigit(static_cast<unsigned char>(data[k]))) {
+            value = value * 10 + static_cast<long long>(data[k] - '0');
+            ++k;
+        }
+        out[found++] = value * sign;
+    }
+    return found;
+}
+
 inline int extract_named_string(const char* data, int len, const char* key, const char** out_ptr) {
     const int key_len = static_cast<int>(std::strlen(key));
     for (int i = 0; i + key_len + 3 < len; ++i) {

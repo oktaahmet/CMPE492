@@ -37,7 +37,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/main.adminWorkflowListResponse"
+                            "$ref": "#/definitions/server.adminWorkflowListResponse"
                         }
                     },
                     "401": {
@@ -81,7 +81,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/main.adminWorkflowActivateRequest"
+                            "$ref": "#/definitions/server.adminWorkflowActivateRequest"
                         }
                     }
                 ],
@@ -89,7 +89,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/main.adminWorkflowActivateResponse"
+                            "$ref": "#/definitions/server.adminWorkflowActivateResponse"
                         }
                     },
                     "400": {
@@ -139,7 +139,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/main.adminWorkflowDeleteRequest"
+                            "$ref": "#/definitions/server.adminWorkflowDeleteRequest"
                         }
                     }
                 ],
@@ -147,7 +147,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/main.adminWorkflowDeleteResponse"
+                            "$ref": "#/definitions/server.adminWorkflowDeleteResponse"
                         }
                     },
                     "400": {
@@ -204,6 +204,12 @@ const docTemplate = `{
                         "name": "cpp_files",
                         "in": "formData",
                         "required": true
+                    },
+                    {
+                        "type": "file",
+                        "description": "Optional workflow input artifact files, written under data/ (max 10MB each)",
+                        "name": "workflow_input_files",
+                        "in": "formData"
                     }
                 ],
                 "responses": {
@@ -237,6 +243,12 @@ const docTemplate = `{
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 }
             }
@@ -250,6 +262,14 @@ const docTemplate = `{
                     "payments"
                 ],
                 "summary": "List payment queue",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Worker ID; inferred from bearer token when worker auth is enabled",
+                        "name": "worker_id",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -258,6 +278,12 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/scheduler.PaymentEvent"
                             }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "405": {
@@ -404,7 +430,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/main.RegisterWorkerRequest"
+                            "$ref": "#/definitions/server.RegisterWorkerRequest"
                         }
                     }
                 ],
@@ -525,7 +551,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/main.NodeOutputChunkResponse"
+                            "$ref": "#/definitions/server.NodeOutputChunkResponse"
                         }
                     },
                     "400": {
@@ -551,129 +577,18 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "main.NodeOutputChunkResponse": {
-            "type": "object",
-            "properties": {
-                "data": {
-                    "type": "string"
-                },
-                "done": {
-                    "type": "boolean"
-                },
-                "items": {
-                    "type": "array",
-                    "items": {}
-                },
-                "limit": {
-                    "type": "integer"
-                },
-                "mode": {
-                    "type": "string"
-                },
-                "next_offset": {
-                    "type": "integer"
-                },
-                "offset": {
-                    "type": "integer"
-                },
-                "total_chars": {
-                    "type": "integer"
-                },
-                "total_items": {
-                    "type": "integer"
-                }
-            }
-        },
-        "main.RegisterWorkerRequest": {
-            "type": "object",
-            "properties": {
-                "worker_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "main.adminWorkflowActivateRequest": {
-            "type": "object",
-            "properties": {
-                "reset_state": {
-                    "type": "boolean"
-                },
-                "topology_mode": {
-                    "type": "string"
-                },
-                "workflow_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "main.adminWorkflowActivateResponse": {
-            "type": "object",
-            "properties": {
-                "enqueued_jobs": {
-                    "type": "integer"
-                },
-                "recovered_nodes": {
-                    "type": "integer"
-                },
-                "reset_state": {
-                    "type": "boolean"
-                },
-                "topological_size": {
-                    "type": "integer"
-                },
-                "topology_mode": {
-                    "type": "string"
-                },
-                "workflow_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "main.adminWorkflowDeleteRequest": {
-            "type": "object",
-            "properties": {
-                "workflow_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "main.adminWorkflowDeleteResponse": {
-            "type": "object",
-            "properties": {
-                "deleted": {
-                    "type": "boolean"
-                },
-                "workflow_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "main.adminWorkflowListResponse": {
-            "type": "object",
-            "properties": {
-                "active_workflow_id": {
-                    "type": "string"
-                },
-                "loaded_workflow_id": {
-                    "type": "string"
-                },
-                "topology_mode": {
-                    "type": "string"
-                },
-                "uploaded_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            }
-        },
         "scheduler.Assignment": {
             "type": "object",
             "properties": {
                 "args": {
                     "type": "array",
                     "items": {}
+                },
+                "artifacts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/scheduler.WorkflowArtifact"
+                    }
                 },
                 "dependencies": {
                     "type": "array",
@@ -829,6 +744,146 @@ const docTemplate = `{
                 },
                 "last_heartbeat": {
                     "type": "string"
+                }
+            }
+        },
+        "scheduler.WorkflowArtifact": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.NodeOutputChunkResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "string"
+                },
+                "done": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {}
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "next_offset": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total_chars": {
+                    "type": "integer"
+                },
+                "total_items": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.RegisterWorkerRequest": {
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.adminWorkflowActivateRequest": {
+            "type": "object",
+            "properties": {
+                "reset_state": {
+                    "type": "boolean"
+                },
+                "topology_mode": {
+                    "type": "string"
+                },
+                "workflow_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.adminWorkflowActivateResponse": {
+            "type": "object",
+            "properties": {
+                "enqueued_jobs": {
+                    "type": "integer"
+                },
+                "recovered_nodes": {
+                    "type": "integer"
+                },
+                "reset_state": {
+                    "type": "boolean"
+                },
+                "topological_size": {
+                    "type": "integer"
+                },
+                "topology_mode": {
+                    "type": "string"
+                },
+                "workflow_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.adminWorkflowDeleteRequest": {
+            "type": "object",
+            "properties": {
+                "workflow_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.adminWorkflowDeleteResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                },
+                "workflow_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.adminWorkflowListResponse": {
+            "type": "object",
+            "properties": {
+                "active_workflow_id": {
+                    "type": "string"
+                },
+                "loaded_workflow_id": {
+                    "type": "string"
+                },
+                "topology_mode": {
+                    "type": "string"
+                },
+                "uploaded_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         }

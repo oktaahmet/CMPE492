@@ -73,11 +73,12 @@ type DependencyRef struct {
 
 type WorkflowArtifact struct {
 	ID          string `json:"id"`
+	File        string `json:"file,omitempty"`
 	Path        string `json:"path,omitempty"`
 	URL         string `json:"url,omitempty"`
 	Size        int64  `json:"size,omitempty"`
 	SHA256      string `json:"sha256,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
+	ContentType string `json:"-"`
 	LocalPath   string `json:"-"`
 }
 

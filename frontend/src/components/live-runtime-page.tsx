@@ -424,6 +424,7 @@ export function LiveRuntimePage() {
                       (job?.assigned_workers?.length ?? 0) > 0 || (job?.submitted_workers?.length ?? 0) > 0;
                     const target = job?.execution_target ?? node.execution_target;
                     const serverNode = isServerNode(node, job);
+                    const traitCount = (job?.traits ?? node.traits ?? []).length;
 
                     return (
                       <button
@@ -451,30 +452,42 @@ export function LiveRuntimePage() {
                         </div>
 
                         <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                          <span className="rounded-full bg-white/80 px-2 py-1">reward {node.reward_usdc}</span>
+                          {!serverNode ? (
+                            <span className="rounded-full bg-white/80 px-2 py-1">reward {node.reward_usdc}</span>
+                          ) : null}
                           <span className={`rounded-full px-2 py-1 font-medium ${targetChipClass(target)}`}>
                             {formatTarget(target)}
                           </span>
-                          <span className="rounded-full bg-white/80 px-2 py-1">
-                            rep {job?.required_replicas ?? node.replication_factor ?? 1}
-                          </span>
-                          <span className="rounded-full bg-white/80 px-2 py-1">
-                            {formatPolicy(job?.acceptance_policy ?? node.acceptance_policy)}
-                          </span>
-                          <span className="rounded-full bg-white/80 px-2 py-1">
-                            assigned {job?.assigned_workers?.length ?? 0}
-                          </span>
-                          <span className="rounded-full bg-white/80 px-2 py-1">
-                            submitted {job?.submitted_workers?.length ?? 0}
-                          </span>
-                          <span className="rounded-full bg-white/80 px-2 py-1">
-                            accepted {job?.accepted_workers ?? 0}
-                          </span>
+                          {!serverNode ? (
+                            <>
+                              <span className="rounded-full bg-white/80 px-2 py-1">
+                                rep {job?.required_replicas ?? node.replication_factor ?? 1}
+                              </span>
+                              <span className="rounded-full bg-white/80 px-2 py-1">
+                                {formatPolicy(job?.acceptance_policy ?? node.acceptance_policy)}
+                              </span>
+                            </>
+                          ) : null}
+                          {!serverNode ? (
+                            <>
+                              <span className="rounded-full bg-white/80 px-2 py-1">
+                                assigned {job?.assigned_workers?.length ?? 0}
+                              </span>
+                              <span className="rounded-full bg-white/80 px-2 py-1">
+                                submitted {job?.submitted_workers?.length ?? 0}
+                              </span>
+                              <span className="rounded-full bg-white/80 px-2 py-1">
+                                accepted {job?.accepted_workers ?? 0}
+                              </span>
+                            </>
+                          ) : null}
                         </div>
 
                         <div className="mt-3 flex items-center justify-between text-[11px] text-slate-600">
-                          <span>{(job?.traits ?? node.traits ?? []).length} tags</span>
-                          <span>{hasWorkerChips ? "tap for workers" : "tap for details"}</span>
+                          <span>{traitCount > 0 ? `${traitCount} tags` : ""}</span>
+                          <span>
+                            {serverNode ? "tap for output" : hasWorkerChips ? "tap for workers" : "tap for details"}
+                          </span>
                         </div>
                       </button>
                     );
@@ -510,36 +523,46 @@ export function LiveRuntimePage() {
                 <span className={`rounded-full px-3 py-1 font-medium ${targetChipClass(selectedTarget)}`}>
                   {formatTarget(selectedTarget)}
                 </span>
-                <span className="rounded-full bg-slate-100 px-3 py-1">reward {selectedNode.node.reward_usdc}</span>
-                <span className="rounded-full bg-slate-100 px-3 py-1">
-                  rep {selectedNode.job?.required_replicas ?? selectedNode.node.replication_factor ?? 1}
-                </span>
-                <span className="rounded-full bg-slate-100 px-3 py-1">
-                  {formatPolicy(selectedNode.job?.acceptance_policy ?? selectedNode.node.acceptance_policy)}
-                </span>
+                {!selectedServerNode ? (
+                  <>
+                    <span className="rounded-full bg-slate-100 px-3 py-1">
+                      reward {selectedNode.node.reward_usdc}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-3 py-1">
+                      rep {selectedNode.job?.required_replicas ?? selectedNode.node.replication_factor ?? 1}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-3 py-1">
+                      {formatPolicy(selectedNode.job?.acceptance_policy ?? selectedNode.node.acceptance_policy)}
+                    </span>
+                  </>
+                ) : null}
                 <span className="rounded-full bg-slate-100 px-3 py-1">priority {selectedNode.node.priority ?? 0}</span>
               </div>
             </div>
 
             <div className="max-h-[calc(88vh-150px)] space-y-5 overflow-auto px-6 py-5">
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <div className="text-xl font-semibold">{selectedNode.job?.assigned_workers?.length ?? 0}</div>
-                  <div className="text-xs text-slate-500">Assigned</div>
+              {!selectedServerNode ? (
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="text-xl font-semibold">{selectedNode.job?.assigned_workers?.length ?? 0}</div>
+                    <div className="text-xs text-slate-500">Assigned</div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="text-xl font-semibold">{selectedNode.job?.submitted_workers?.length ?? 0}</div>
+                    <div className="text-xs text-slate-500">Submitted</div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="text-xl font-semibold">{selectedNode.job?.accepted_workers ?? 0}</div>
+                    <div className="text-xs text-slate-500">Accepted</div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="text-xl font-semibold">
+                      {(selectedNode.job?.traits ?? selectedNode.node.traits ?? []).length}
+                    </div>
+                    <div className="text-xs text-slate-500">Traits</div>
+                  </div>
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <div className="text-xl font-semibold">{selectedNode.job?.submitted_workers?.length ?? 0}</div>
-                  <div className="text-xs text-slate-500">Submitted</div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <div className="text-xl font-semibold">{selectedNode.job?.accepted_workers ?? 0}</div>
-                  <div className="text-xs text-slate-500">Accepted</div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <div className="text-xl font-semibold">{(selectedNode.job?.traits ?? selectedNode.node.traits ?? []).length}</div>
-                  <div className="text-xs text-slate-500">Traits</div>
-                </div>
-              </div>
+              ) : null}
 
               {(selectedNode.job?.traits ?? selectedNode.node.traits ?? []).length > 0 ? (
                 <div>
@@ -554,47 +577,49 @@ export function LiveRuntimePage() {
                 </div>
               ) : null}
 
-              <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-                <div>
-                  <div className="mb-2 text-sm font-medium text-slate-700">Assigned Workers</div>
-                  <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                    {(selectedNode.job?.assigned_workers?.length ?? 0) > 0 ? (
-                      <div className="space-y-2">
-                        {selectedNode.job?.assigned_workers?.map((workerID) => (
-                          <div
-                            key={`${selectedNode.node.id}-modal-assigned-${workerID}`}
-                            className="w-full break-all rounded-2xl bg-sky-100 px-3 py-2 font-mono text-xs text-sky-900"
-                          >
-                            {workerID}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-sm text-slate-500">No assigned workers.</div>
-                    )}
+              {!selectedServerNode ? (
+                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-slate-700">Assigned Workers</div>
+                    <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                      {(selectedNode.job?.assigned_workers?.length ?? 0) > 0 ? (
+                        <div className="space-y-2">
+                          {selectedNode.job?.assigned_workers?.map((workerID) => (
+                            <div
+                              key={`${selectedNode.node.id}-modal-assigned-${workerID}`}
+                              className="w-full break-all rounded-2xl bg-sky-100 px-3 py-2 font-mono text-xs text-sky-900"
+                            >
+                              {workerID}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-slate-500">No assigned workers.</div>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                <div>
-                  <div className="mb-2 text-sm font-medium text-slate-700">Submitted Workers</div>
-                  <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                    {(selectedNode.job?.submitted_workers?.length ?? 0) > 0 ? (
-                      <div className="space-y-2">
-                        {selectedNode.job?.submitted_workers?.map((workerID) => (
-                          <div
-                            key={`${selectedNode.node.id}-modal-submitted-${workerID}`}
-                            className="w-full break-all rounded-2xl bg-violet-100 px-3 py-2 font-mono text-xs text-violet-900"
-                          >
-                            {workerID}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-sm text-slate-500">No submitted workers.</div>
-                    )}
+                  <div>
+                    <div className="mb-2 text-sm font-medium text-slate-700">Submitted Workers</div>
+                    <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                      {(selectedNode.job?.submitted_workers?.length ?? 0) > 0 ? (
+                        <div className="space-y-2">
+                          {selectedNode.job?.submitted_workers?.map((workerID) => (
+                            <div
+                              key={`${selectedNode.node.id}-modal-submitted-${workerID}`}
+                              className="w-full break-all rounded-2xl bg-violet-100 px-3 py-2 font-mono text-xs text-violet-900"
+                            >
+                              {workerID}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-slate-500">No submitted workers.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : null}
 
               <div>
                 <div className="mb-2 text-sm font-medium text-slate-700">Final Output</div>

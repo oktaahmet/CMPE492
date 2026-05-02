@@ -1,75 +1,42 @@
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <emscripten/emscripten.h>
 
-#include "../common/runtime_json.hpp"
+#include "../common/workflow.hpp"
 
 namespace {
-constexpr int kInputCap = 4096;
-constexpr int kOutputCap = 1024;
-
-unsigned char g_input[kInputCap];
-char g_output[kOutputCap];
-int g_output_len = 0;
-
-int count_token(const char* data, int len, const char* token) {
+int count_token(std::string_view data, const char* token) {
     const int token_len = static_cast<int>(std::strlen(token));
-    if (token_len <= 0 || len < token_len) {
+    if (token_len <= 0 || data.size() < static_cast<size_t>(token_len)) {
         return 0;
     }
 
     int count = 0;
-    for (int i = 0; i + token_len <= len; ++i) {
-        bool match = true;
-        for (int j = 0; j < token_len; ++j) {
-            if (data[i + j] != token[j]) {
-                match = false;
-                break;
-            }
-        }
-        if (match) {
+    for (size_t i = 0; i + static_cast<size_t>(token_len) <= data.size(); ++i) {
+        if (std::memcmp(data.data() + i, token, static_cast<size_t>(token_len)) == 0) {
             ++count;
-            i += token_len - 1;
+            i += static_cast<size_t>(token_len - 1);
         }
     }
     return count;
 }
 }  // namespace
 
-extern "C" {
-EMSCRIPTEN_KEEPALIVE int get_input_ptr() { return static_cast<int>(reinterpret_cast<uintptr_t>(g_input)); }
-EMSCRIPTEN_KEEPALIVE int get_input_capacity() { return kInputCap; }
-EMSCRIPTEN_KEEPALIVE int get_output_ptr() { return static_cast<int>(reinterpret_cast<uintptr_t>(g_output)); }
-EMSCRIPTEN_KEEPALIVE int get_output_len() { return g_output_len; }
+WORKFLOW_NODE(input, output) {
+    const int passes = input.int_("passes", 2);
+    const std::string_view upstream = input.node("emit-text").string("output");
+    const int item_count = count_token(upstream, "item_");
 
-EMSCRIPTEN_KEEPALIVE int run_json(int input_len) {
-    if (input_len < 0 || input_len > kInputCap) {
-        return 1;
-    }
-
-    const char* in = reinterpret_cast<const char*>(g_input);
-
-    // This node still has its own args even though it also consumes an input.
-    const int passes = static_cast<int>(runtime_json::extract_named_int(in, input_len, "passes", 2));
-
-    // Read the upstream node output from inputs["emit-text"].output.
-    const char* upstream = nullptr;
-    const int text_len = runtime_json::extract_input_output_string(in, input_len, "emit-text", &upstream);
-    const int item_count = upstream ? count_token(upstream, text_len, "item_") : 0;
-
-    // Return a compact summary string as this node's output.
-    g_output_len = std::snprintf(
-        g_output,
-        kOutputCap,
+    char buf[256];
+    const int n = std::snprintf(
+        buf,
+        static_cast<int>(sizeof(buf)),
         "\"passes_%d bytes_%d items_%d\"",
         passes,
-        text_len,
+        static_cast<int>(upstream.size()),
         item_count);
-    if (g_output_len < 0 || g_output_len >= kOutputCap) {
-        g_output_len = 0;
-        return 2;
+    if (n < 0 || n >= static_cast<int>(sizeof(buf))) {
+        output.fail(30);
+        return;
     }
-    return 0;
-}
+    output.text(buf);
 }

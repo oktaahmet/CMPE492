@@ -20,11 +20,11 @@ export type DependencyRef = {
 
 export type WorkflowArtifact = {
   id: string;
+  file?: string;
   path?: string;
   url?: string;
   size?: number;
   sha256?: string;
-  content_type?: string;
 };
 
 export type Assignment = {
@@ -72,6 +72,7 @@ export type RuntimeWorkflowNode = {
   id: string;
   depends_on?: string[];
   priority?: number;
+  program?: string;
   wasm_url: string;
   execution_target?: "browser_worker" | "server";
   reward_usdc: string;
@@ -332,11 +333,13 @@ export async function fetchStats(): Promise<unknown> {
   return response.json();
 }
 
-export async function fetchPayments(workerID?: string): Promise<PaymentEvent[]> {
-  const qs = new URLSearchParams();
-  if (workerID && workerID.trim() !== "") {
-    qs.set("worker_id", workerID.trim());
+export async function fetchPayments(workerID: string): Promise<PaymentEvent[]> {
+  const trimmedWorkerID = workerID.trim();
+  if (trimmedWorkerID === "") {
+    throw new Error("worker_id is required");
   }
+  const qs = new URLSearchParams();
+  qs.set("worker_id", trimmedWorkerID);
   const suffix = qs.toString();
   const response = await fetch(`/api/payments${suffix ? `?${suffix}` : ""}`, {
     headers: authHeaders(),

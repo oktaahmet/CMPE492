@@ -1,0 +1,68 @@
+{
+  "id": "wf-composed-metrics-review-014",
+  "nodes": [
+    {
+      "id": "collect-metrics",
+      "program": "collect_metrics.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "seed": 42,
+          "samples": 18
+        }
+      ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.03"
+    },
+    {
+      "id": "score-metrics",
+      "depends_on": [
+        "collect-metrics"
+      ],
+      "program": "score_metrics.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "warning_threshold": 580
+        }
+      ],
+      "replication_factor": 3,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.04"
+    },
+    {
+      "id": "build-review",
+      "depends_on": [
+        "collect-metrics",
+        "score-metrics"
+      ],
+      "program": "build_review.cpp",
+      "execution_target": "server",
+      "args": [
+        {
+          "expected_score_samples": 3
+        }
+      ],
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    }
+  ]
+}

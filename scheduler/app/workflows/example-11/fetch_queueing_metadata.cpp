@@ -1,42 +1,24 @@
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <emscripten/emscripten.h>
 
-#include "../common/runtime_browser.hpp"
-#include "../common/runtime_json.hpp"
+#include "../common/workflow.hpp"
 
 namespace {
-constexpr int kInputCap = 16 * 1024;
 constexpr int kURLCap = 1024;
 constexpr int kFetchCap = 12 * 1024;
-constexpr int kOutputCap = 3072;
 constexpr const char* kFallbackURL =
     "https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&titles=Queueing_theory&prop=extracts&exintro=1&explaintext=1";
 
-unsigned char g_input[kInputCap];
 char g_url[kURLCap];
 char g_fetch[kFetchCap];
-char g_output[kOutputCap];
-int g_output_len = 0;
 
-int copy_url_or_fallback(const char* in, int input_len, char* out, int out_cap) {
-    const char* url_ptr = nullptr;
-    const int url_len = runtime_json::extract_named_string(in, input_len, "url", &url_ptr);
-    if (!out || out_cap <= 0) {
-        return 0;
+void copy_url(std::string_view url) {
+    if (url.empty()) {
+        url = kFallbackURL;
     }
-    if (url_ptr && url_len > 0) {
-        const int n = url_len < out_cap - 1 ? url_len : out_cap - 1;
-        std::memcpy(out, url_ptr, static_cast<size_t>(n));
-        out[n] = '\0';
-        return n;
-    }
-    const int n = static_cast<int>(std::strlen(kFallbackURL));
-    const int copy = n < out_cap - 1 ? n : out_cap - 1;
-    std::memcpy(out, kFallbackURL, static_cast<size_t>(copy));
-    out[copy] = '\0';
-    return copy;
+    const size_t copy = url.size() < static_cast<size_t>(kURLCap - 1) ? url.size() : static_cast<size_t>(kURLCap - 1);
+    std::memcpy(g_url, url.data(), copy);
+    g_url[copy] = '\0';
 }
 
 bool ascii_equal_ci(char a, char b) {
@@ -46,11 +28,8 @@ bool ascii_equal_ci(char a, char b) {
 }
 
 int count_substring_ci(const char* data, int len, const char* needle) {
-    if (!data || len <= 0 || !needle) {
-        return 0;
-    }
     const int needle_len = static_cast<int>(std::strlen(needle));
-    if (needle_len <= 0 || needle_len > len) {
+    if (!data || needle_len <= 0 || needle_len > len) {
         return 0;
     }
     int count = 0;
@@ -72,7 +51,7 @@ int count_substring_ci(const char* data, int len, const char* needle) {
 
 int count_digits(const char* data, int len) {
     int count = 0;
-    for (int i = 0; i < len; ++i) {
+    for (int i = 0; data && i < len; ++i) {
         if (data[i] >= '0' && data[i] <= '9') {
             ++count;
         }
@@ -83,7 +62,7 @@ int count_digits(const char* data, int len) {
 int count_word_tokens(const char* data, int len) {
     int count = 0;
     bool in_word = false;
-    for (int i = 0; i < len; ++i) {
+    for (int i = 0; data && i < len; ++i) {
         const unsigned char c = static_cast<unsigned char>(data[i]);
         const bool is_word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
         if (is_word && !in_word) {
@@ -94,72 +73,49 @@ int count_word_tokens(const char* data, int len) {
     return count;
 }
 
-int make_preview(const char* data, int len, char* out, int out_cap, int max_chars) {
+void make_preview(const char* data, int len, char* out, int out_cap, int max_chars) {
     int pos = 0;
     const int limit = len < max_chars ? len : max_chars;
-    for (int i = 0; i < limit && pos < out_cap - 1; ++i) {
+    for (int i = 0; data && i < limit && pos < out_cap - 1; ++i) {
         const char c = data[i];
         if (c == '"' || c == '\\') {
             if (pos + 2 >= out_cap) break;
             out[pos++] = '\\';
             out[pos++] = c;
-            continue;
-        }
-        if (c == '\n' || c == '\r' || c == '\t') {
+        } else if (c == '\n' || c == '\r' || c == '\t') {
             if (pos + 2 >= out_cap) break;
             out[pos++] = '\\';
-            out[pos++] = (c == '\n') ? 'n' : (c == '\r' ? 'r' : 't');
-            continue;
+            out[pos++] = c == '\n' ? 'n' : (c == '\r' ? 'r' : 't');
+        } else if (static_cast<unsigned char>(c) >= 32) {
+            out[pos++] = c;
         }
-        if (static_cast<unsigned char>(c) < 32) {
-            continue;
-        }
-        out[pos++] = c;
     }
     out[pos] = '\0';
-    return pos;
 }
 }  // namespace
 
-extern "C" {
-EMSCRIPTEN_KEEPALIVE int get_input_ptr() { return static_cast<int>(reinterpret_cast<uintptr_t>(g_input)); }
-EMSCRIPTEN_KEEPALIVE int get_input_capacity() { return kInputCap; }
-EMSCRIPTEN_KEEPALIVE int get_output_ptr() { return static_cast<int>(reinterpret_cast<uintptr_t>(g_output)); }
-EMSCRIPTEN_KEEPALIVE int get_output_len() { return g_output_len; }
-
-EMSCRIPTEN_KEEPALIVE int run_json(int input_len) {
-    if (input_len < 0 || input_len > kInputCap) {
-        return 1;
-    }
-
-    const char* in = reinterpret_cast<const char*>(g_input);
-    copy_url_or_fallback(in, input_len, g_url, kURLCap);
-    const int timeout_ms = static_cast<int>(runtime_json::extract_named_int(in, input_len, "timeout_ms", 3000));
+WORKFLOW_NODE_WITH_CAPS(input, output, 16 * 1024, 3072) {
+    copy_url(input.string("url"));
+    const int timeout_ms = input.int_("timeout_ms", 3000);
     const runtime_browser::FetchResult response = runtime_browser::get(g_url, g_fetch, kFetchCap, timeout_ms);
+
+    auto json = output.object();
+    json.field("ok", response.ok);
+    json.field("source_url", g_url);
+    json.field("http_status", response.http_status);
     if (!response.ok) {
-        g_output_len = std::snprintf(
-            g_output,
-            kOutputCap,
-            "{\"ok\":false,\"source_url\":\"%s\",\"http_status\":%d,\"error_code\":%d}",
-            g_url,
-            response.http_status,
-            response.error_code);
-        return g_output_len < 0 || g_output_len >= kOutputCap ? 2 : 0;
+        json.field("error_code", response.error_code);
+        json.done();
+        return;
     }
 
-    char preview[512];
+    char preview[512] = {};
     make_preview(response.data, response.bytes, preview, static_cast<int>(sizeof(preview)), 220);
-    g_output_len = std::snprintf(
-        g_output,
-        kOutputCap,
-        "{\"ok\":true,\"source_url\":\"%s\",\"metadata_bytes\":%d,\"metadata_word_count\":%d,\"metadata_digit_count\":%d,\"metadata_queue_mentions\":%d,\"metadata_title_mentions\":%d,\"preview\":\"%s\"}",
-        g_url,
-        response.bytes,
-        count_word_tokens(response.data, response.bytes),
-        count_digits(response.data, response.bytes),
-        count_substring_ci(response.data, response.bytes, "queue"),
-        count_substring_ci(response.data, response.bytes, "title"),
-        preview);
-    return g_output_len < 0 || g_output_len >= kOutputCap ? 3 : 0;
-}
+    json.field("metadata_bytes", response.bytes);
+    json.field("metadata_word_count", count_word_tokens(response.data, response.bytes));
+    json.field("metadata_digit_count", count_digits(response.data, response.bytes));
+    json.field("metadata_queue_mentions", count_substring_ci(response.data, response.bytes, "queue"));
+    json.field("metadata_title_mentions", count_substring_ci(response.data, response.bytes, "title"));
+    json.field("preview", preview);
+    json.done();
 }

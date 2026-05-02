@@ -3,80 +3,126 @@
   "artifacts": [
     {
       "id": "numbers-bin",
-      "path": "data/numbers.bin",
-      "content_type": "application/octet-stream"
+      "file": "numbers.bin"
     }
   ],
   "nodes": [
     {
       "id": "hash-shard-0",
-      "wasm_url": "/example-13/hash_shard.wasm?v=1",
+      "program": "hash_shard.cpp",
       "execution_target": "browser_worker",
-      "uses_artifacts": ["numbers-bin"],
-      "args": [{ "range_start": 0, "range_count": 250000 }],
+      "uses_artifacts": [
+        "numbers-bin"
+      ],
+      "args": [
+        {
+          "range_start": 0,
+          "range_count": 250000
+        }
+      ],
       "replication_factor": 1,
-      "traits": ["binary-input", "hash-search", "shard"],
+      "acceptance_policy": "consensus",
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.04"
     },
     {
       "id": "hash-shard-1",
-      "wasm_url": "/example-13/hash_shard.wasm?v=1",
+      "program": "hash_shard.cpp",
       "execution_target": "browser_worker",
-      "uses_artifacts": ["numbers-bin"],
-      "args": [{ "range_start": 250000, "range_count": 250000 }],
+      "uses_artifacts": [
+        "numbers-bin"
+      ],
+      "args": [
+        {
+          "range_start": 250000,
+          "range_count": 250000
+        }
+      ],
       "replication_factor": 1,
-      "traits": ["binary-input", "hash-search", "shard"],
+      "acceptance_policy": "consensus",
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.04"
     },
     {
       "id": "hash-shard-2",
-      "wasm_url": "/example-13/hash_shard.wasm?v=1",
+      "program": "hash_shard.cpp",
       "execution_target": "browser_worker",
-      "uses_artifacts": ["numbers-bin"],
-      "args": [{ "range_start": 500000, "range_count": 250000 }],
+      "uses_artifacts": [
+        "numbers-bin"
+      ],
+      "args": [
+        {
+          "range_start": 500000,
+          "range_count": 250000
+        }
+      ],
       "replication_factor": 1,
-      "traits": ["binary-input", "hash-search", "shard"],
+      "acceptance_policy": "consensus",
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.04"
     },
     {
       "id": "hash-shard-3",
-      "wasm_url": "/example-13/hash_shard.wasm?v=1",
+      "program": "hash_shard.cpp",
       "execution_target": "browser_worker",
-      "uses_artifacts": ["numbers-bin"],
-      "args": [{ "range_start": 750000, "range_count": 250000 }],
+      "uses_artifacts": [
+        "numbers-bin"
+      ],
+      "args": [
+        {
+          "range_start": 750000,
+          "range_count": 250000
+        }
+      ],
       "replication_factor": 1,
-      "traits": ["binary-input", "hash-search", "shard"],
+      "acceptance_policy": "consensus",
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.04"
     },
     {
       "id": "merge-hash-matches",
-      "depends_on": ["hash-shard-0", "hash-shard-1", "hash-shard-2", "hash-shard-3"],
-      "wasm_url": "/example-13/merge_matches.wasm?v=1",
+      "depends_on": [
+        "hash-shard-0",
+        "hash-shard-1",
+        "hash-shard-2",
+        "hash-shard-3"
+      ],
+      "program": "merge_matches.cpp",
       "execution_target": "server",
-      "args": [{}],
-      "replication_factor": 1,
+      "args": [
+        {}
+      ],
       "output_artifacts": [
         {
           "id": "matches",
-          "path": "matches.txt",
-          "content_type": "text/plain"
+          "file": "matches.txt"
         }
       ],
-      "traits": ["merge", "server", "output-artifact"],
       "result_schema": {
-        "output": { "type": "object", "required": true }
+        "output": {
+          "type": "object",
+          "required": true
+        }
       },
       "reward_usdc": "0.00"
     }

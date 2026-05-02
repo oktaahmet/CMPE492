@@ -1,7 +1,8 @@
-#include <emscripten/emscripten.h>
+#include "../common/workflow.hpp"
 
-extern "C" {
-EMSCRIPTEN_KEEPALIVE int run(int a, int b) {
-    return a + b;
-}
+WORKFLOW_NODE(input, output) {
+    const long long combined =
+        input.node("reduce-gaps").number("output") +
+        input.node("reduce-stats").number("output");
+    output.number(combined);
 }

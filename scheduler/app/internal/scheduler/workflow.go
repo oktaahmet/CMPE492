@@ -9,16 +9,21 @@ import (
 	"sync"
 )
 
+// WorkflowSpec is the persisted/user-authored workflow document. It describes a
+// DAG of compute nodes plus optional input artifacts shared by those nodes.
 type WorkflowSpec struct {
 	ID        string             `json:"id"`
 	Artifacts []WorkflowArtifact `json:"artifacts,omitempty"`
 	Nodes     []WorkflowNode     `json:"nodes"`
 }
 
+// WorkflowNode is one DAG vertex. The scheduler turns ready nodes into Jobs;
+// the engine handles assignment/replication after that handoff.
 type WorkflowNode struct {
 	ID                string                      `json:"id"`
 	DependsOn         []string                    `json:"depends_on,omitempty"`
 	Priority          int                         `json:"priority,omitempty"`
+	Program           string                      `json:"program,omitempty"`
 	WasmURL           string                      `json:"wasm_url"`
 	ExecutionTarget   ExecutionTarget             `json:"execution_target,omitempty"`
 	Args              []any                       `json:"args,omitempty"`
@@ -31,6 +36,8 @@ type WorkflowNode struct {
 	Traits            []string                    `json:"traits,omitempty"`
 }
 
+// WorkflowLoadResult reports what the manager accepted and which initial nodes
+// became runnable after validation/recovery.
 type WorkflowLoadResult struct {
 	WorkflowID       string   `json:"workflow_id"`
 	TopologicalOrder []string `json:"topological_order"`
@@ -45,16 +52,23 @@ const (
 	TopologyModePriorityAware TopologyMode = "priority_aware"
 )
 
+// workflowRuntime is the in-memory DAG state for the currently loaded workflow.
+// pendingDeps counts unfinished parents; dependents is the reverse adjacency map
+// used to unlock children when a node finalizes.
 type workflowRuntime struct {
-	spec        WorkflowSpec
-	nodesByID   map[string]WorkflowNode
-	topo        []string
+	spec      WorkflowSpec
+	nodesByID map[string]WorkflowNode
+	topo      []string
+	// outputs is the completed-node set. Persisted outputs are replayed here on
+	// load so an interrupted workflow can continue from the first unfinished node.
 	outputs     map[string]map[string]any
 	enqueued    map[string]bool
 	pendingDeps map[string]int
 	dependents  map[string][]string
 }
 
+// WorkflowManager owns DAG progression. It does not execute jobs itself; it
+// converts ready workflow nodes to scheduler Jobs and tracks job_id -> node_id.
 type WorkflowManager struct {
 	mu        sync.Mutex
 	mode      TopologyMode
@@ -62,10 +76,13 @@ type WorkflowManager struct {
 	jobToNode map[string]string
 }
 
+// WorkflowNodeSnapshot is the UI/runtime view of a node. It intentionally
+// exposes metadata and state, not stored output bodies.
 type WorkflowNodeSnapshot struct {
 	ID                string             `json:"id"`
 	DependsOn         []string           `json:"depends_on,omitempty"`
 	Priority          int                `json:"priority,omitempty"`
+	Program           string             `json:"program,omitempty"`
 	WasmURL           string             `json:"wasm_url"`
 	ExecutionTarget   ExecutionTarget    `json:"execution_target,omitempty"`
 	RewardUSDC        string             `json:"reward_usdc"`
@@ -78,12 +95,15 @@ type WorkflowNodeSnapshot struct {
 	Traits            []string           `json:"traits,omitempty"`
 }
 
+// WorkflowRuntimeSnapshot is the live UI/runtime graph payload.
 type WorkflowRuntimeSnapshot struct {
 	WorkflowID       string                 `json:"workflow_id"`
 	TopologicalOrder []string               `json:"topological_order"`
 	Nodes            []WorkflowNodeSnapshot `json:"nodes"`
 }
 
+// NewWorkflowManager creates an empty manager using plain lexicographic
+// scheduling for equally-ready nodes.
 func NewWorkflowManager() *WorkflowManager {
 	return &WorkflowManager{
 		mode:      TopologyModePlain,
@@ -91,6 +111,7 @@ func NewWorkflowManager() *WorkflowManager {
 	}
 }
 
+// NormalizeTopologyMode maps unknown/empty values to the default mode.
 func NormalizeTopologyMode(raw string) TopologyMode {
 	switch TopologyMode(strings.TrimSpace(raw)) {
 	case TopologyModePriorityAware:
@@ -100,6 +121,7 @@ func NormalizeTopologyMode(raw string) TopologyMode {
 	}
 }
 
+// IsValidTopologyMode reports whether a requested topology mode can be stored.
 func IsValidTopologyMode(raw string) bool {
 	switch TopologyMode(strings.TrimSpace(raw)) {
 	case TopologyModePlain, TopologyModePriorityAware:
@@ -109,18 +131,22 @@ func IsValidTopologyMode(raw string) bool {
 	}
 }
 
+// SetTopologyMode changes the ordering strategy used when multiple nodes are
+// ready at the same time.
 func (m *WorkflowManager) SetTopologyMode(mode TopologyMode) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mode = NormalizeTopologyMode(string(mode))
 }
 
+// TopologyMode returns the manager's current ready-node ordering mode.
 func (m *WorkflowManager) TopologyMode() TopologyMode {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.mode
 }
 
+// ValidateWorkflowSpec normalizes and validates a workflow without loading it.
 func ValidateWorkflowSpec(spec WorkflowSpec) (WorkflowSpec, error) {
 	normalized, _, _, err := normalizeAndValidateWorkflow(spec, TopologyModePlain)
 	if err != nil {
@@ -129,10 +155,13 @@ func ValidateWorkflowSpec(spec WorkflowSpec) (WorkflowSpec, error) {
 	return normalized, nil
 }
 
+// LoadWorkflow validates a fresh workflow and enqueues its initial ready nodes.
 func (m *WorkflowManager) LoadWorkflow(spec WorkflowSpec) (WorkflowLoadResult, []Job, error) {
 	return m.LoadWorkflowWithCompleted(spec, nil)
 }
 
+// LoadWorkflowWithCompleted validates a workflow, replays previously finalized
+// node outputs, and returns the nodes that are ready to execute next.
 func (m *WorkflowManager) LoadWorkflowWithCompleted(spec WorkflowSpec, completed map[string]map[string]any) (WorkflowLoadResult, []Job, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -157,6 +186,8 @@ func (m *WorkflowManager) LoadWorkflowWithCompleted(spec WorkflowSpec, completed
 	}
 	initializeWorkflowRuntime(runtime)
 
+	// Recovered completions update dependency counters before ready nodes are
+	// selected; this is what lets activation resume a partially finished DAG.
 	for nodeID, output := range completed {
 		if _, exists := runtime.nodesByID[nodeID]; !exists {
 			continue
@@ -164,6 +195,8 @@ func (m *WorkflowManager) LoadWorkflowWithCompleted(spec WorkflowSpec, completed
 		markNodeCompletedLocked(runtime, nodeID, output)
 	}
 
+	// After recovery, any node with all parents completed and not already
+	// completed becomes an initial job. Root nodes naturally fall into this set.
 	ready := readyNodesLocked(runtime, runtime.topo, m.mode)
 	jobs := make([]Job, 0, len(ready))
 	jobIDs := make([]string, 0, len(ready))
@@ -185,6 +218,8 @@ func (m *WorkflowManager) LoadWorkflowWithCompleted(spec WorkflowSpec, completed
 	}, jobs, nil
 }
 
+// ActiveWorkflowID returns the loaded workflow id, or empty when no workflow is
+// currently active in memory.
 func (m *WorkflowManager) ActiveWorkflowID() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -195,6 +230,7 @@ func (m *WorkflowManager) ActiveWorkflowID() string {
 	return m.runtime.spec.ID
 }
 
+// ClearWorkflow forgets the loaded DAG and all job-to-node routing state.
 func (m *WorkflowManager) ClearWorkflow() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -202,6 +238,7 @@ func (m *WorkflowManager) ClearWorkflow() {
 	m.jobToNode = make(map[string]string)
 }
 
+// Snapshot returns the current runtime graph for the live UI.
 func (m *WorkflowManager) Snapshot() (WorkflowRuntimeSnapshot, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -217,6 +254,7 @@ func (m *WorkflowManager) Snapshot() (WorkflowRuntimeSnapshot, bool) {
 			ID:                node.ID,
 			DependsOn:         append([]string(nil), node.DependsOn...),
 			Priority:          node.Priority,
+			Program:           node.Program,
 			WasmURL:           node.WasmURL,
 			ExecutionTarget:   node.ExecutionTarget,
 			RewardUSDC:        node.RewardUSDC,
@@ -237,6 +275,9 @@ func (m *WorkflowManager) Snapshot() (WorkflowRuntimeSnapshot, bool) {
 	}, true
 }
 
+// OnJobFinalized records a finalized job output and returns newly-unlocked child
+// jobs. Unknown/stale job IDs are ignored so duplicate finalized callbacks stay
+// harmless.
 func (m *WorkflowManager) OnJobFinalized(jobID string, output map[string]any) ([]Job, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -254,6 +295,8 @@ func (m *WorkflowManager) OnJobFinalized(jobID string, output map[string]any) ([
 	markNodeCompletedLocked(runtime, nodeID, output)
 	delete(m.jobToNode, jobID)
 
+	// Only direct children can become newly ready after this node completes.
+	// Their own pendingDeps counters already include all other prerequisites.
 	ready := readyNodesLocked(runtime, runtime.dependents[nodeID], m.mode)
 	if len(ready) == 0 {
 		return nil, nil
@@ -271,6 +314,8 @@ func (m *WorkflowManager) OnJobFinalized(jobID string, output map[string]any) ([
 	return nextJobs, nil
 }
 
+// initializeWorkflowRuntime builds the dependency counters and reverse edges
+// used by the incremental unlock path.
 func initializeWorkflowRuntime(runtime *workflowRuntime) {
 	for _, nodeID := range runtime.topo {
 		node := runtime.nodesByID[nodeID]
@@ -284,6 +329,8 @@ func initializeWorkflowRuntime(runtime *workflowRuntime) {
 	}
 }
 
+// markNodeCompletedLocked stores a node output and decrements each direct
+// child's pending dependency counter exactly once.
 func markNodeCompletedLocked(runtime *workflowRuntime, nodeID string, output map[string]any) {
 	if isNodeCompleted(runtime, nodeID) {
 		return
@@ -291,6 +338,8 @@ func markNodeCompletedLocked(runtime *workflowRuntime, nodeID string, output map
 
 	runtime.outputs[nodeID] = cloneJSONMap(output)
 
+	// pendingDeps never scans all parents. Each finalized parent decrements its
+	// direct children; a child reaches zero only after all parents are complete.
 	for _, childID := range runtime.dependents[nodeID] {
 		if runtime.pendingDeps[childID] > 0 {
 			runtime.pendingDeps[childID]--
@@ -298,6 +347,8 @@ func markNodeCompletedLocked(runtime *workflowRuntime, nodeID string, output map
 	}
 }
 
+// readyNodesLocked filters candidate nodes down to runnable nodes and sorts them
+// according to the configured topology mode.
 func readyNodesLocked(runtime *workflowRuntime, candidateIDs []string, mode TopologyMode) []string {
 	ready := make([]string, 0, len(candidateIDs))
 	for _, nodeID := range candidateIDs {
@@ -313,6 +364,7 @@ func readyNodesLocked(runtime *workflowRuntime, candidateIDs []string, mode Topo
 	return ready
 }
 
+// jobFromNode converts workflow metadata into an Engine job assignment model.
 func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 	args := append([]any(nil), node.Args...)
 
@@ -327,6 +379,8 @@ func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 	for _, artifact := range runtime.spec.Artifacts {
 		artifactByID[artifact.ID] = artifact
 	}
+	// Jobs receive only the workflow artifacts they explicitly requested. The
+	// manager keeps artifact hydration separate, so the engine only sees metadata.
 	artifacts := make([]WorkflowArtifact, 0, len(node.UsesArtifacts))
 	for _, artifactID := range node.UsesArtifacts {
 		if artifact, ok := artifactByID[artifactID]; ok {
@@ -352,6 +406,7 @@ func jobFromNode(runtime *workflowRuntime, node WorkflowNode) Job {
 	}
 }
 
+// isNodeCompleted reports whether the runtime has an output for a node.
 func isNodeCompleted(runtime *workflowRuntime, nodeID string) bool {
 	if runtime == nil {
 		return false
@@ -360,10 +415,13 @@ func isNodeCompleted(runtime *workflowRuntime, nodeID string) bool {
 	return exists
 }
 
+// jobID gives each node job a deterministic id inside its workflow.
 func jobID(workflowID, nodeID string) string {
 	return fmt.Sprintf("%s:%s", workflowID, nodeID)
 }
 
+// normalizeAndValidateWorkflow trims/defaults a workflow, checks DAG validity,
+// and returns lookup structures used by the runtime.
 func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (WorkflowSpec, map[string]WorkflowNode, []string, error) {
 	spec.ID = strings.TrimSpace(spec.ID)
 	if spec.ID == "" {
@@ -372,7 +430,7 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 	if len(spec.Nodes) == 0 {
 		return WorkflowSpec{}, nil, nil, errors.New("workflow nodes are required")
 	}
-	artifacts, artifactIDs, err := normalizeArtifacts(spec.Artifacts)
+	artifacts, artifactIDs, err := normalizeArtifacts(spec.Artifacts, "data")
 	if err != nil {
 		return WorkflowSpec{}, nil, nil, err
 	}
@@ -382,13 +440,14 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 	for _, raw := range spec.Nodes {
 		node := raw
 		node.ID = strings.TrimSpace(node.ID)
+		node.Program = strings.TrimSpace(strings.ReplaceAll(node.Program, "\\", "/"))
 		node.WasmURL = strings.TrimSpace(node.WasmURL)
 		node.RewardUSDC = strings.TrimSpace(node.RewardUSDC)
-		node.AcceptancePolicy = NormalizeAcceptancePolicy(strings.TrimSpace(string(node.AcceptancePolicy)))
-		node.ExecutionTarget = NormalizeExecutionTarget(strings.TrimSpace(string(node.ExecutionTarget)))
+		rawAcceptancePolicy := strings.TrimSpace(string(node.AcceptancePolicy))
+		rawExecutionTarget := strings.TrimSpace(string(node.ExecutionTarget))
 		node.Traits = normalizeTraits(node.Traits)
 		node.UsesArtifacts = normalizeStringList(node.UsesArtifacts)
-		outputArtifacts, outputArtifactIDs, err := normalizeArtifacts(node.OutputArtifacts)
+		outputArtifacts, outputArtifactIDs, err := normalizeArtifacts(node.OutputArtifacts, "")
 		if err != nil {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s output_artifacts invalid: %w", node.ID, err)
 		}
@@ -400,9 +459,10 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		if node.WasmURL == "" {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("wasm_url is required for node %s", node.ID)
 		}
-		if !IsValidExecutionTarget(string(node.ExecutionTarget)) {
+		if !IsValidExecutionTarget(rawExecutionTarget) {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s execution_target is invalid", node.ID)
 		}
+		node.ExecutionTarget = NormalizeExecutionTarget(rawExecutionTarget)
 		if node.RewardUSDC == "" {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("reward_usdc is required for node %s", node.ID)
 		}
@@ -415,9 +475,10 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		if node.ExecutionTarget != ExecutionTargetServer && len(node.OutputArtifacts) > 0 {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s output_artifacts are currently supported only for server execution_target", node.ID)
 		}
-		if !IsValidAcceptancePolicy(string(node.AcceptancePolicy)) {
+		if !IsValidAcceptancePolicy(rawAcceptancePolicy) {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s acceptance_policy is invalid", node.ID)
 		}
+		node.AcceptancePolicy = NormalizeAcceptancePolicy(rawAcceptancePolicy)
 		if len(outputArtifactIDs) != len(node.OutputArtifacts) {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s output_artifacts contains duplicate ids", node.ID)
 		}
@@ -430,6 +491,8 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 			}
 		}
 
+		// Dependencies are normalized before the unknown-node check below so
+		// duplicate parent names do not inflate pendingDeps.
 		seenDeps := map[string]bool{}
 		deps := make([]string, 0, len(node.DependsOn))
 		for _, dep := range node.DependsOn {
@@ -457,6 +520,8 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		normalizedNodes = append(normalizedNodes, node)
 	}
 
+	// Unknown dependencies are checked after all nodes are collected so forward
+	// references are allowed in workflow JSON.
 	for _, node := range normalizedNodes {
 		for _, dep := range node.DependsOn {
 			if _, ok := nodesByID[dep]; !ok {
@@ -477,11 +542,15 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 	}, nodesByID, topo, nil
 }
 
-func normalizeArtifacts(raw []WorkflowArtifact) ([]WorkflowArtifact, map[string]bool, error) {
+// normalizeArtifacts validates artifact ids/files/paths and returns both sorted
+// metadata and an id set for uses_artifacts checks. New authoring should use
+// file; path remains supported for older workflow JSON.
+func normalizeArtifacts(raw []WorkflowArtifact, fileDefaultDir string) ([]WorkflowArtifact, map[string]bool, error) {
 	seen := make(map[string]bool, len(raw))
 	out := make([]WorkflowArtifact, 0, len(raw))
 	for _, artifact := range raw {
 		artifact.ID = strings.TrimSpace(artifact.ID)
+		artifact.File = strings.TrimSpace(strings.ReplaceAll(artifact.File, "\\", "/"))
 		artifact.Path = strings.TrimSpace(strings.ReplaceAll(artifact.Path, "\\", "/"))
 		artifact.URL = strings.TrimSpace(artifact.URL)
 		artifact.SHA256 = strings.TrimSpace(artifact.SHA256)
@@ -495,14 +564,29 @@ func normalizeArtifacts(raw []WorkflowArtifact) ([]WorkflowArtifact, map[string]
 		if seen[artifact.ID] {
 			return nil, nil, fmt.Errorf("duplicate artifact id: %s", artifact.ID)
 		}
-		if artifact.Path == "" {
-			return nil, nil, fmt.Errorf("artifact %s path is required", artifact.ID)
+		if artifact.Path == "" && artifact.File != "" {
+			if !isSafeArtifactFile(artifact.File) {
+				return nil, nil, fmt.Errorf("artifact %s file must be a filename", artifact.ID)
+			}
+			if fileDefaultDir != "" {
+				artifact.Path = path.Join(fileDefaultDir, artifact.File)
+			} else {
+				artifact.Path = artifact.File
+			}
 		}
+		if artifact.Path == "" {
+			return nil, nil, fmt.Errorf("artifact %s file is required", artifact.ID)
+		}
+		// Artifact paths are workflow-relative. This prevents uploaded workflow
+		// specs from reading files outside their own directory.
 		cleaned := path.Clean(artifact.Path)
 		if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." || path.IsAbs(cleaned) {
 			return nil, nil, fmt.Errorf("artifact %s path must be relative and stay inside workflow folder", artifact.ID)
 		}
 		artifact.Path = cleaned
+		if artifact.File == "" && !strings.Contains(cleaned, "/") {
+			artifact.File = cleaned
+		}
 		seen[artifact.ID] = true
 		out = append(out, artifact)
 	}
@@ -512,6 +596,15 @@ func normalizeArtifacts(raw []WorkflowArtifact) ([]WorkflowArtifact, map[string]
 	return out, seen, nil
 }
 
+func isSafeArtifactFile(value string) bool {
+	if value == "" || strings.Contains(value, "/") || value == "." || value == ".." {
+		return false
+	}
+	return path.Clean(value) == value
+}
+
+// isSafeArtifactID restricts artifact ids to simple stable path/query-safe
+// tokens.
 func isSafeArtifactID(value string) bool {
 	if value == "" {
 		return false
@@ -525,6 +618,8 @@ func isSafeArtifactID(value string) bool {
 	return true
 }
 
+// normalizeStringList trims, deduplicates, and sorts user-authored string lists
+// while preserving case.
 func normalizeStringList(raw []string) []string {
 	if len(raw) == 0 {
 		return nil
@@ -546,6 +641,8 @@ func normalizeStringList(raw []string) []string {
 	return out
 }
 
+// cloneArtifacts protects runtime state from callers mutating slices returned
+// through jobs or snapshots.
 func cloneArtifacts(in []WorkflowArtifact) []WorkflowArtifact {
 	if len(in) == 0 {
 		return nil
@@ -555,6 +652,8 @@ func cloneArtifacts(in []WorkflowArtifact) []WorkflowArtifact {
 	return out
 }
 
+// normalizeTraits turns descriptive node tags into stable lowercase metadata for
+// UI display and future capability matching.
 func normalizeTraits(raw []string) []string {
 	if len(raw) == 0 {
 		return nil
@@ -577,6 +676,8 @@ func normalizeTraits(raw []string) []string {
 	return traits
 }
 
+// topologicalSort returns a deterministic Kahn topological ordering and rejects
+// cyclic workflows.
 func topologicalSort(nodesByID map[string]WorkflowNode, mode TopologyMode) ([]string, error) {
 	inDegree := make(map[string]int, len(nodesByID))
 	edges := make(map[string][]string, len(nodesByID))
@@ -593,6 +694,8 @@ func topologicalSort(nodesByID map[string]WorkflowNode, mode TopologyMode) ([]st
 		}
 	}
 
+	// ready is repeatedly sorted so both the final topo order and each ready
+	// batch are deterministic across map iteration order.
 	for id := range edges {
 		sort.Strings(edges[id])
 	}
@@ -626,6 +729,8 @@ func topologicalSort(nodesByID map[string]WorkflowNode, mode TopologyMode) ([]st
 	return out, nil
 }
 
+// sortReadyNodeIDs orders runnable nodes. Priority-aware mode prefers larger
+// priority values, then falls back to node id for deterministic ties.
 func sortReadyNodeIDs(ids []string, nodesByID map[string]WorkflowNode, mode TopologyMode) {
 	sort.Slice(ids, func(i, j int) bool {
 		if mode != TopologyModePriorityAware {
@@ -640,6 +745,7 @@ func sortReadyNodeIDs(ids []string, nodesByID map[string]WorkflowNode, mode Topo
 	})
 }
 
+// validateNodeResultSchema rejects schema field types the engine cannot enforce.
 func validateNodeResultSchema(nodeID string, schema map[string]PayloadFieldRule) error {
 	for field, rule := range schema {
 		expected := strings.ToLower(strings.TrimSpace(rule.Type))

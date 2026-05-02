@@ -1,7 +1,10 @@
-#include <emscripten/emscripten.h>
+#include "../common/workflow.hpp"
 
-extern "C" {
-EMSCRIPTEN_KEEPALIVE int run(int a, int b) {
-    return a + b;
-}
+WORKFLOW_NODE(input, output) {
+    const long long total =
+        input.node("gaps-a").number("output") +
+        input.node("gaps-b").number("output") +
+        input.node("gaps-c").number("output") +
+        input.node("gaps-d").number("output");
+    output.number(total);
 }
