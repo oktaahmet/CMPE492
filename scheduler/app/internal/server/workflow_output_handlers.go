@@ -7,9 +7,36 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"x402-scheduler/internal/scheduler"
 )
+
+const (
+	defaultNodeOutputChunkLimit = 256
+	maxNodeOutputChunkLimit     = 16384
+)
+
+type artifactFileSignature struct {
+	path    string
+	modTime time.Time
+	size    int64
+}
+
+type workflowArtifactSpecCacheEntry struct {
+	specModTime time.Time
+	specSize    int64
+	artifacts   map[string]artifactFileSignature
+	spec        scheduler.WorkflowSpec
+}
+
+var workflowArtifactSpecCache = struct {
+	sync.Mutex
+	entries map[string]workflowArtifactSpecCacheEntry
+}{
+	entries: map[string]workflowArtifactSpecCacheEntry{},
+}
 
 // workflowArtifactHandler serves static input artifacts and finalized server output artifacts.
 func workflowArtifactHandler(store workflowOutputStore) http.HandlerFunc {
@@ -36,22 +63,7 @@ func workflowArtifactHandler(store workflowOutputStore) http.HandlerFunc {
 			http.Error(w, "workflow not found", http.StatusNotFound)
 			return
 		}
-		spec, err := readWorkflowSpecFromPath(specPath)
-		if err != nil {
-			http.Error(w, "failed to read workflow", http.StatusInternalServerError)
-			return
-		}
-		spec, err = resolveWorkflowPrograms(spec, specPath)
-		if err != nil {
-			http.Error(w, "workflow program resolution failed", http.StatusInternalServerError)
-			return
-		}
-		normalized, err := scheduler.ValidateWorkflowSpec(spec)
-		if err != nil {
-			http.Error(w, "workflow validation failed", http.StatusInternalServerError)
-			return
-		}
-		normalized, err = hydrateWorkflowArtifacts(normalized, specPath)
+		normalized, err := loadWorkflowArtifactSpec(specPath)
 		if err != nil {
 			http.Error(w, "artifact metadata failed", http.StatusInternalServerError)
 			return
@@ -91,6 +103,9 @@ func serveOutputArtifact(
 		http.Error(w, "artifact store unavailable", http.StatusInternalServerError)
 		return
 	}
+	// The output body is not needed here; this existing store call is just the
+	// completion gate that prevents serving declared output files before the node
+	// has finalized.
 	if _, found, err := store.LoadWorkflowNodeOutput(r.Context(), workflowID, nodeID); err != nil {
 		http.Error(w, "failed to load workflow node output", http.StatusInternalServerError)
 		return
@@ -163,6 +178,10 @@ func workflowNodeOutputHandler(store workflowOutputStore) http.HandlerFunc {
 			http.Error(w, "workflow_id and node_id are required", http.StatusBadRequest)
 			return
 		}
+		if !isSafeWorkflowID(workflowID) || !isSafeWorkflowID(nodeID) {
+			http.Error(w, "invalid workflow_id or node_id", http.StatusBadRequest)
+			return
+		}
 
 		output, found, err := store.LoadWorkflowNodeOutput(r.Context(), workflowID, nodeID)
 		if err != nil {
@@ -204,12 +223,13 @@ func workflowNodeOutputChunkHandler(store workflowOutputStore) http.HandlerFunc 
 			http.Error(w, "workflow_id and node_id are required", http.StatusBadRequest)
 			return
 		}
+		if !isSafeWorkflowID(workflowID) || !isSafeWorkflowID(nodeID) {
+			http.Error(w, "invalid workflow_id or node_id", http.StatusBadRequest)
+			return
+		}
 
 		offset := parsePositiveIntQuery(r.URL.Query().Get("offset"), 0)
-		limit := parsePositiveIntQuery(r.URL.Query().Get("limit"), 256)
-		if limit > 16384 {
-			limit = 16384
-		}
+		limit := parseChunkLimitQuery(r.URL.Query().Get("limit"))
 
 		output, found, err := store.LoadWorkflowNodeOutput(r.Context(), workflowID, nodeID)
 		if err != nil {
@@ -241,4 +261,118 @@ func parsePositiveIntQuery(raw string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func parseChunkLimitQuery(raw string) int {
+	limit := parsePositiveIntQuery(raw, defaultNodeOutputChunkLimit)
+	if limit <= 0 {
+		return defaultNodeOutputChunkLimit
+	}
+	if limit > maxNodeOutputChunkLimit {
+		return maxNodeOutputChunkLimit
+	}
+	return limit
+}
+
+// loadWorkflowArtifactSpec parses, validates, and hydrates the workflow metadata
+// needed by artifact serving. The cache avoids repeated JSON parsing and input
+// artifact hashing on hot artifact URLs.
+func loadWorkflowArtifactSpec(specPath string) (scheduler.WorkflowSpec, error) {
+	info, err := os.Stat(specPath)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, err
+	}
+	if info.IsDir() {
+		return scheduler.WorkflowSpec{}, os.ErrInvalid
+	}
+	if spec, ok := cachedWorkflowArtifactSpec(specPath, info); ok {
+		return spec, nil
+	}
+
+	spec, err := readWorkflowSpecFromPath(specPath)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, err
+	}
+	spec, err = resolveWorkflowPrograms(spec, specPath)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, err
+	}
+	normalized, err := scheduler.ValidateWorkflowSpec(spec)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, err
+	}
+	normalized, err = hydrateWorkflowArtifacts(normalized, specPath)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, err
+	}
+	cacheWorkflowArtifactSpec(specPath, info, normalized)
+	return normalized, nil
+}
+
+// cachedWorkflowArtifactSpec reuses an entry only while both the workflow spec
+// and its static input artifact files still have the same size and modtime.
+func cachedWorkflowArtifactSpec(specPath string, info os.FileInfo) (scheduler.WorkflowSpec, bool) {
+	workflowArtifactSpecCache.Lock()
+	entry, ok := workflowArtifactSpecCache.entries[specPath]
+	workflowArtifactSpecCache.Unlock()
+	if !ok || !entry.specModTime.Equal(info.ModTime()) || entry.specSize != info.Size() {
+		return scheduler.WorkflowSpec{}, false
+	}
+	if !artifactFileSignaturesMatch(entry.artifacts) {
+		return scheduler.WorkflowSpec{}, false
+	}
+	return entry.spec, true
+}
+
+// cacheWorkflowArtifactSpec skips caching if any input artifact disappeared
+// between hydration and cache insertion.
+func cacheWorkflowArtifactSpec(specPath string, info os.FileInfo, spec scheduler.WorkflowSpec) {
+	signatures, ok := collectArtifactFileSignatures(spec.Artifacts)
+	if !ok {
+		return
+	}
+
+	workflowArtifactSpecCache.Lock()
+	workflowArtifactSpecCache.entries[specPath] = workflowArtifactSpecCacheEntry{
+		specModTime: info.ModTime(),
+		specSize:    info.Size(),
+		artifacts:   signatures,
+		spec:        spec,
+	}
+	workflowArtifactSpecCache.Unlock()
+}
+
+func invalidateWorkflowArtifactSpecCache() {
+	workflowArtifactSpecCache.Lock()
+	workflowArtifactSpecCache.entries = map[string]workflowArtifactSpecCacheEntry{}
+	workflowArtifactSpecCache.Unlock()
+}
+
+func collectArtifactFileSignatures(artifacts []scheduler.WorkflowArtifact) (map[string]artifactFileSignature, bool) {
+	signatures := make(map[string]artifactFileSignature, len(artifacts))
+	for _, artifact := range artifacts {
+		info, err := os.Stat(artifact.LocalPath)
+		if err != nil || info.IsDir() {
+			return nil, false
+		}
+		signatures[artifact.ID] = artifactFileSignature{
+			path:    artifact.LocalPath,
+			modTime: info.ModTime(),
+			size:    info.Size(),
+		}
+	}
+	return signatures, true
+}
+
+func artifactFileSignaturesMatch(signatures map[string]artifactFileSignature) bool {
+	for _, signature := range signatures {
+		info, err := os.Stat(signature.path)
+		if err != nil || info.IsDir() {
+			return false
+		}
+		if !signature.modTime.Equal(info.ModTime()) || signature.size != info.Size() {
+			return false
+		}
+	}
+	return true
 }

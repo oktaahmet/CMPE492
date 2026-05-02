@@ -9,19 +9,11 @@
   </head>
   <body>
     <main class="shell">
-      <section class="top-card">
-        <div class="title-block">
-          <h1><span class="title-icon">≋</span> Workflow Admin</h1>
-        </div>
-        <div class="top-actions">
-          <span class="badge" id="sessionPill">Locked</span>
-        </div>
-      </section>
-
       <section class="panel auth-panel" id="authCard">
         <form class="auth-form" id="authForm">
-          <label class="auth-title" for="tokenInput"><span class="section-icon">▣</span> Admin Token</label>
+          <label class="auth-title" for="tokenInput">Admin Token</label>
           <input id="tokenInput" type="password" autocomplete="current-password" placeholder="ADMIN_API_TOKEN" />
+          <span class="badge" id="sessionPill">Locked</span>
           <button class="button primary" id="unlockBtn" type="submit">Unlock</button>
         </form>
       </section>
@@ -30,7 +22,6 @@
         <section class="panel upload-panel">
           <div class="panel-heading">
             <h2><span class="section-icon">⇧</span> Upload Workflow</h2>
-            <span class="panel-kicker" id="cppFilesHint">No C++ file selected</span>
           </div>
 
           <div class="file-grid">
@@ -44,9 +35,15 @@
               <input id="cppFilesInput" type="file" accept=".cpp" multiple />
               <strong class="file-control">Choose C++ files</strong>
             </label>
+            <label class="file-drop">
+              <span>Workflow input files</span>
+              <input id="workflowInputFilesInput" type="file" multiple />
+              <strong class="file-control">Choose input files</strong>
+            </label>
           </div>
 
           <ul id="cppFilesList" class="file-list"></ul>
+          <ul id="workflowInputFilesList" class="file-list"></ul>
 
           <div class="actions compact-actions">
             <button class="button primary" id="uploadBtn" type="button">Upload</button>
@@ -86,7 +83,11 @@
         </section>
       </section>
 
-      <section class="panel output-panel">
+      <section class="maintenance-row" id="maintenancePanel" hidden>
+        <button class="button secondary" id="requeuePaymentsBtn" type="button">Requeue Interrupted Payments</button>
+      </section>
+
+      <section class="panel output-panel" id="outputPanel" hidden>
         <div class="panel-heading">
           <h2>Logs</h2>
           <button class="button ghost" id="clearOutputBtn" type="button">Clear</button>

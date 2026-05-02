@@ -1,26 +1,36 @@
 const tokenInput = document.getElementById("tokenInput");
 const authForm = document.getElementById("authForm");
 const adminPanel = document.getElementById("adminPanel");
+const maintenancePanel = document.getElementById("maintenancePanel");
+const outputPanel = document.getElementById("outputPanel");
 const sessionPill = document.getElementById("sessionPill");
 const workflowSelect = document.getElementById("workflowSelect");
 const workflowJsonInput = document.getElementById("workflowJsonInput");
 const cppFilesInput = document.getElementById("cppFilesInput");
-const cppFilesHint = document.getElementById("cppFilesHint");
+const workflowInputFilesInput = document.getElementById("workflowInputFilesInput");
 const cppFilesList = document.getElementById("cppFilesList");
+const workflowInputFilesList = document.getElementById("workflowInputFilesList");
 const topologyModeSelect = document.getElementById("topologyModeSelect");
 const uploadBtn = document.getElementById("uploadBtn");
 const activateBtn = document.getElementById("activateBtn");
 const deleteBtn = document.getElementById("deleteBtn");
 const refreshBtn = document.getElementById("refreshBtn");
+const requeuePaymentsBtn = document.getElementById("requeuePaymentsBtn");
 const resetStateInput = document.getElementById("resetStateInput");
 const clearOutputBtn = document.getElementById("clearOutputBtn");
 const output = document.getElementById("output");
 const statusLine = document.getElementById("statusLine");
 
 let adminToken = "";
+const maxWorkflowInputFileBytes = 10 * 1024 * 1024;
 const selectedCppFiles = new Map();
+const selectedWorkflowInputFiles = new Map();
 
 function cppFileKey(file) {
+  return `${file.name}::${file.size}::${file.lastModified}`;
+}
+
+function workflowInputFileKey(file) {
   return `${file.name}::${file.size}::${file.lastModified}`;
 }
 
@@ -40,7 +50,15 @@ function show(value) {
 }
 
 function setUnlocked(unlocked) {
-  adminPanel.hidden = !unlocked;
+  if (adminPanel) {
+    adminPanel.hidden = !unlocked;
+  }
+  if (maintenancePanel) {
+    maintenancePanel.hidden = !unlocked;
+  }
+  if (outputPanel) {
+    outputPanel.hidden = !unlocked;
+  }
   sessionPill.textContent = unlocked ? "Unlocked" : "Locked";
   sessionPill.classList.toggle("unlocked", unlocked);
 }
@@ -76,11 +94,8 @@ function renderSelectedCppFiles() {
   cppFilesList.innerHTML = "";
 
   if (files.length === 0) {
-    cppFilesHint.textContent = "No C++ file selected";
     return;
   }
-
-  cppFilesHint.textContent = `${files.length} C++ file(s) selected`;
   for (const file of files) {
     const item = document.createElement("li");
     item.textContent = file.name;
@@ -88,37 +103,62 @@ function renderSelectedCppFiles() {
   }
 }
 
+function renderWorkflowInputFiles() {
+  const files = Array.from(selectedWorkflowInputFiles.values());
+  if (!workflowInputFilesList) {
+    return;
+  }
+  workflowInputFilesList.innerHTML = "";
+
+  for (const file of files) {
+    const item = document.createElement("li");
+    item.textContent = `${file.name} (${formatBytes(file.size)})`;
+    workflowInputFilesList.appendChild(item);
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function setWorkflowOptions(ids, preferredID) {
-  workflowSelect.innerHTML = "";
+  while (workflowSelect.options.length > 0) {
+    workflowSelect.remove(0);
+  }
 
   if (!ids || ids.length === 0) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "No workflow found";
-    workflowSelect.appendChild(option);
+    workflowSelect.options.add(new Option("No workflow found", ""));
     return;
   }
 
   for (const id of ids) {
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = id;
-    workflowSelect.appendChild(option);
+    workflowSelect.options.add(new Option(id, id));
   }
 
   if (preferredID && ids.includes(preferredID)) {
     workflowSelect.value = preferredID;
+  } else {
+    workflowSelect.selectedIndex = 0;
   }
 }
 
-async function refreshWorkflows() {
+async function refreshWorkflows(options = {}) {
   const data = await api("/api/admin/workflows");
   const preferredID = data.active_workflow_id || data.loaded_workflow_id || "";
 
   setWorkflowOptions(data.uploaded_ids || [], preferredID);
   topologyModeSelect.value = data.topology_mode || "plain";
-  statusLine.textContent = `${preferredID || "No active workflow"} / ${data.topology_mode || "plain"}`;
-  show(data);
+  statusLine.textContent = `${preferredID || "No active workflow"} / ${data.topology_mode || "plain"} / ${(data.uploaded_ids || []).length} workflows`;
+  if (!options.quiet) {
+    show(data);
+  }
+  return data;
 }
 
 async function unlock() {
@@ -148,6 +188,7 @@ async function unlock() {
 async function uploadWorkflow() {
   const workflowJSON = workflowJsonInput.files[0];
   const cppFiles = Array.from(selectedCppFiles.values());
+  const inputFiles = Array.from(selectedWorkflowInputFiles.values());
 
   if (!adminToken) {
     show("Unlock first.");
@@ -167,6 +208,9 @@ async function uploadWorkflow() {
   for (const file of cppFiles) {
     form.append("cpp_files", file);
   }
+  for (const file of inputFiles) {
+    form.append("workflow_input_files", file);
+  }
 
   setBusy(uploadBtn, true, "Uploading");
   try {
@@ -177,8 +221,10 @@ async function uploadWorkflow() {
     show(data);
     workflowJsonInput.value = "";
     selectedCppFiles.clear();
+    selectedWorkflowInputFiles.clear();
     renderSelectedCppFiles();
-    await refreshWorkflows();
+    renderWorkflowInputFiles();
+    await refreshWorkflows({ quiet: true });
   } catch (err) {
     show(String(err));
   } finally {
@@ -210,7 +256,7 @@ async function activateWorkflow() {
       }),
     });
     show(data);
-    await refreshWorkflows();
+    await refreshWorkflows({ quiet: true });
   } catch (err) {
     show(String(err));
   } finally {
@@ -241,11 +287,33 @@ async function deleteWorkflow() {
       body: JSON.stringify({ workflow_id: workflowID }),
     });
     show(data);
-    await refreshWorkflows();
+    await refreshWorkflows({ quiet: true });
   } catch (err) {
     show(String(err));
   } finally {
     setBusy(deleteBtn, false);
+  }
+}
+
+async function requeueInterruptedPayments() {
+  if (!adminToken) {
+    show("Unlock first.");
+    return;
+  }
+  if (!window.confirm("Requeue interrupted payments?")) {
+    return;
+  }
+
+  setBusy(requeuePaymentsBtn, true, "Requeueing");
+  try {
+    const data = await api("/api/admin/payments/requeue-interrupted", {
+      method: "POST",
+    });
+    show(data);
+  } catch (err) {
+    show(String(err));
+  } finally {
+    setBusy(requeuePaymentsBtn, false);
   }
 }
 
@@ -261,6 +329,20 @@ cppFilesInput.addEventListener("change", () => {
   cppFilesInput.value = "";
   renderSelectedCppFiles();
 });
+
+if (workflowInputFilesInput) {
+  workflowInputFilesInput.addEventListener("change", () => {
+    for (const file of workflowInputFilesInput.files) {
+      if (file.size > maxWorkflowInputFileBytes) {
+        show(`${file.name} exceeds the 10 MB workflow input limit.`);
+        continue;
+      }
+      selectedWorkflowInputFiles.set(workflowInputFileKey(file), file);
+    }
+    workflowInputFilesInput.value = "";
+    renderWorkflowInputFiles();
+  });
+}
 
 uploadBtn.addEventListener("click", () => {
   void uploadWorkflow();
@@ -278,9 +360,16 @@ refreshBtn.addEventListener("click", () => {
   void refreshWorkflows().catch((err) => show(String(err)));
 });
 
+if (requeuePaymentsBtn) {
+  requeuePaymentsBtn.addEventListener("click", () => {
+    void requeueInterruptedPayments();
+  });
+}
+
 clearOutputBtn.addEventListener("click", () => {
   show("Ready.");
 });
 
 renderSelectedCppFiles();
+renderWorkflowInputFiles();
 setUnlocked(false);

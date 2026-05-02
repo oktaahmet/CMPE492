@@ -4,10 +4,15 @@
     {
       "id": "range-a",
       "program": "prime.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        1,
-        1000000
+        {
+          "start": 1,
+          "end": 1000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
       "result_schema": {
         "output": {
           "type": "number",
@@ -19,10 +24,15 @@
     {
       "id": "range-b",
       "program": "prime.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        1000001,
-        2000000
+        {
+          "start": 1000001,
+          "end": 2000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
       "result_schema": {
         "output": {
           "type": "number",
@@ -34,10 +44,15 @@
     {
       "id": "range-c",
       "program": "prime.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        2000001,
-        3000000
+        {
+          "start": 2000001,
+          "end": 3000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
       "result_schema": {
         "output": {
           "type": "number",
@@ -49,10 +64,15 @@
     {
       "id": "range-d",
       "program": "prime.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        3000001,
-        4000000
+        {
+          "start": 3000001,
+          "end": 4000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
       "result_schema": {
         "output": {
           "type": "number",
@@ -67,10 +87,21 @@
         "range-a"
       ],
       "program": "gaps.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        1,
-        1000000
+        {
+          "start": 1,
+          "end": 1000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -79,10 +110,21 @@
         "range-b"
       ],
       "program": "gaps.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        1000001,
-        2000000
+        {
+          "start": 1000001,
+          "end": 2000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -91,10 +133,21 @@
         "range-c"
       ],
       "program": "gaps.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        2000001,
-        3000000
+        {
+          "start": 2000001,
+          "end": 3000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -103,10 +156,21 @@
         "range-d"
       ],
       "program": "gaps.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        3000001,
-        4000000
+        {
+          "start": 3000001,
+          "end": 4000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -115,10 +179,21 @@
         "range-a"
       ],
       "program": "stats.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        1,
-        1000000
+        {
+          "start": 1,
+          "end": 1000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -127,10 +202,21 @@
         "range-b"
       ],
       "program": "stats.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        1000001,
-        2000000
+        {
+          "start": 1000001,
+          "end": 2000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -139,10 +225,21 @@
         "range-c"
       ],
       "program": "stats.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        2000001,
-        3000000
+        {
+          "start": 2000001,
+          "end": 3000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -151,10 +248,21 @@
         "range-d"
       ],
       "program": "stats.cpp",
+      "execution_target": "browser_worker",
       "args": [
-        3000001,
-        4000000
+        {
+          "start": 3000001,
+          "end": 4000000
+        }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -166,10 +274,15 @@
         "gaps-d"
       ],
       "program": "reduce_gaps.cpp",
-      "args": [
-        0,
-        0
-      ],
+      "execution_target": "browser_worker",
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -181,10 +294,15 @@
         "stats-d"
       ],
       "program": "reduce_stats.cpp",
-      "args": [
-        0,
-        0
-      ],
+      "execution_target": "browser_worker",
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "0.01"
     },
     {
@@ -194,10 +312,15 @@
         "reduce-stats"
       ],
       "program": "finalize.cpp",
-      "args": [
-        0,
-        0
-      ],
+      "execution_target": "browser_worker",
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "number",
+          "required": true
+        }
+      },
       "reward_usdc": "3"
     }
   ]

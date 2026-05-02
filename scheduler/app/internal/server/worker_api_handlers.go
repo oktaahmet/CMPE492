@@ -36,6 +36,8 @@ func registerWorkerHandler(engine *scheduler.Engine, auth *workerAuth) http.Hand
 			return
 		}
 		if auth != nil {
+			// With worker auth enabled, registering/heartbeating another wallet
+			// with a valid token is forbidden.
 			authWorkerID, err := auth.authenticateRequest(r)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -73,6 +75,8 @@ func pullHandler(engine *scheduler.Engine, auth *workerAuth) http.HandlerFunc {
 			return
 		}
 		if auth != nil {
+			// Pull is scoped to the authenticated worker so one browser cannot
+			// reserve assignments on behalf of another wallet.
 			authWorkerID, err := auth.authenticateRequest(r)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -135,6 +139,8 @@ func resultHandler(
 			return
 		}
 		if auth != nil {
+			// Result submissions are accepted only from the worker that owns the
+			// assignment token scope.
 			authWorkerID, err := auth.authenticateRequest(r)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -152,6 +158,8 @@ func resultHandler(
 			return
 		}
 		if decision.Finalized {
+			// The engine decides consensus; the server persists the accepted
+			// payload and advances the workflow only after that final decision.
 			if err := handleBrowserFinalizedDecision(r.Context(), engine, workflowManager, store, req.JobID, decision); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,9 @@ func TestWorkerAuthIssueVerifyAndAuthenticate(t *testing.T) {
 	challenge, err := auth.issueChallenge(workerID, "localhost:8080")
 	if err != nil {
 		t.Fatalf("issueChallenge: %v", err)
+	}
+	if !strings.Contains(challenge.Message, "Host: localhost:8080") {
+		t.Fatalf("challenge message should include host, got %q", challenge.Message)
 	}
 
 	hash := accounts.TextHash([]byte(challenge.Message))
@@ -81,6 +85,15 @@ func TestWorkerAuthRejectsWrongSignature(t *testing.T) {
 
 	if _, err := auth.verifyChallenge(workerID, challenge.Nonce, hexutil.Encode(signature)); err == nil {
 		t.Fatal("expected wrong signature to be rejected")
+	}
+
+	ownerHash := accounts.TextHash([]byte(challenge.Message))
+	ownerSignature, err := crypto.Sign(ownerHash, ownerKey)
+	if err != nil {
+		t.Fatalf("sign owner challenge: %v", err)
+	}
+	if _, err := auth.verifyChallenge(workerID, challenge.Nonce, hexutil.Encode(ownerSignature)); err == nil {
+		t.Fatal("expected failed signature attempt to consume challenge nonce")
 	}
 }
 

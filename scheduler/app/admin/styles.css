@@ -12,6 +12,8 @@
   --secondary: #f4f4f5;
   --secondary-hover: #ececef;
   --destructive: #dc2626;
+  --success: #15803d;
+  --danger: #b91c1c;
   --radius: 24px;
   font-family:
     "Nunito Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
@@ -28,6 +30,10 @@
 
 * {
   box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 body {
@@ -53,7 +59,6 @@ select {
   padding: 22px 0;
 }
 
-.top-card,
 .panel {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -62,28 +67,9 @@ select {
   backdrop-filter: blur(14px);
 }
 
-.top-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  min-height: 76px;
-  padding: 18px 22px;
-}
-
-h1,
 h2 {
   margin: 0;
   letter-spacing: 0;
-}
-
-h1 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 28px;
-  font-weight: 500;
-  line-height: 1.15;
 }
 
 h2 {
@@ -94,10 +80,9 @@ h2 {
   font-weight: 500;
 }
 
-.title-icon,
 .section-icon {
   display: inline-flex;
-  width: 25px;
+  width: 20px;
   justify-content: center;
   color: var(--foreground);
   font-weight: 500;
@@ -124,10 +109,10 @@ h2 {
   min-height: 26px;
   border-radius: 999px;
   padding: 0 12px;
-  background: var(--secondary);
-  color: var(--foreground);
+  background: #fee2e2;
+  color: var(--danger);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 800;
   white-space: nowrap;
 }
 
@@ -137,13 +122,17 @@ h2 {
 }
 
 .badge.unlocked {
-  background: var(--primary);
-  color: #ffffff;
+  background: #dcfce7;
+  color: var(--success);
 }
 
 .panel {
   margin-top: 12px;
   overflow: hidden;
+}
+
+.auth-panel {
+  margin-top: 0;
 }
 
 .panel-heading {
@@ -177,8 +166,8 @@ h2 {
 
 .auth-form {
   display: grid;
-  grid-template-columns: auto minmax(220px, 1fr) auto;
-  gap: 14px;
+  grid-template-columns: auto minmax(220px, 1fr) auto auto;
+  gap: 12px;
   align-items: center;
   margin-top: 16px;
   margin-bottom: 16px;
@@ -258,6 +247,10 @@ button:focus-visible {
   margin-top: 10px;
 }
 
+.file-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .file-drop {
   position: relative;
   display: grid;
@@ -302,6 +295,10 @@ button:focus-visible {
   list-style: none;
   margin-top: 10px;
   margin-bottom: 0;
+}
+
+.file-list:empty {
+  display: none;
 }
 
 .file-list li {
@@ -405,6 +402,12 @@ button:focus-visible {
   color: var(--destructive);
 }
 
+.maintenance-row {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 12px;
+}
+
 .output-panel pre {
   min-height: 180px;
   max-height: 460px;
@@ -427,11 +430,6 @@ button:focus-visible {
     padding: 20px 0;
   }
 
-  .top-card {
-    min-height: 0;
-    padding: 24px;
-  }
-
   .auth-form,
   .workspace,
   .file-grid,
@@ -448,6 +446,10 @@ button:focus-visible {
   }
 
   .actions {
+    align-items: stretch;
+  }
+
+  .maintenance-row {
     align-items: stretch;
   }
 

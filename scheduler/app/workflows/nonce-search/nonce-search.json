@@ -1,0 +1,320 @@
+{
+  "id": "wf-staged-sha256-nonce-search",
+  "nodes": [
+    {
+      "id": "round-1-a",
+      "program": "sha256_nonce_search.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "round": 1,
+          "source_round": 0,
+          "message": "final-demo-block",
+          "start": 0,
+          "attempts": 12000,
+          "target_bits": 12
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.03"
+    },
+    {
+      "id": "round-1-b",
+      "program": "sha256_nonce_search.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "round": 1,
+          "source_round": 0,
+          "message": "final-demo-block",
+          "start": 12000,
+          "attempts": 12000,
+          "target_bits": 12
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.03"
+    },
+    {
+      "id": "round-1-c",
+      "program": "sha256_nonce_search.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "round": 1,
+          "source_round": 0,
+          "message": "final-demo-block",
+          "start": 24000,
+          "attempts": 12000,
+          "target_bits": 12
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.03"
+    },
+    {
+      "id": "verify-round-1",
+      "depends_on": [
+        "round-1-a",
+        "round-1-b",
+        "round-1-c"
+      ],
+      "program": "verify_nonce_round.cpp",
+      "execution_target": "server",
+      "args": [
+        {
+          "round": 1,
+          "source_round": 0,
+          "message": "final-demo-block",
+          "target_bits": 12,
+          "write_report": 0
+        }
+      ],
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    },
+    {
+      "id": "round-2-a",
+      "depends_on": [
+        "verify-round-1"
+      ],
+      "program": "sha256_nonce_search.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "round": 2,
+          "source_round": 1,
+          "start": 1000000,
+          "attempts": 60000,
+          "target_bits": 16
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.04"
+    },
+    {
+      "id": "round-2-b",
+      "depends_on": [
+        "verify-round-1"
+      ],
+      "program": "sha256_nonce_search.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "round": 2,
+          "source_round": 1,
+          "start": 1060000,
+          "attempts": 60000,
+          "target_bits": 16
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.04"
+    },
+    {
+      "id": "round-2-c",
+      "depends_on": [
+        "verify-round-1"
+      ],
+      "program": "sha256_nonce_search.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "round": 2,
+          "source_round": 1,
+          "start": 1120000,
+          "attempts": 60000,
+          "target_bits": 16
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.04"
+    },
+    {
+      "id": "verify-round-2",
+      "depends_on": [
+        "verify-round-1",
+        "round-2-a",
+        "round-2-b",
+        "round-2-c"
+      ],
+      "program": "verify_nonce_round.cpp",
+      "execution_target": "server",
+      "args": [
+        {
+          "round": 2,
+          "source_round": 1,
+          "target_bits": 16,
+          "write_report": 0
+        }
+      ],
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    },
+    {
+      "id": "round-3-a",
+      "depends_on": [
+        "verify-round-2"
+      ],
+      "program": "sha256_nonce_search.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "round": 3,
+          "source_round": 2,
+          "start": 2000000,
+          "attempts": 120000,
+          "target_bits": 18
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.05"
+    },
+    {
+      "id": "round-3-b",
+      "depends_on": [
+        "verify-round-2"
+      ],
+      "program": "sha256_nonce_search.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "round": 3,
+          "source_round": 2,
+          "start": 2120000,
+          "attempts": 120000,
+          "target_bits": 18
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.05"
+    },
+    {
+      "id": "round-3-c",
+      "depends_on": [
+        "verify-round-2"
+      ],
+      "program": "sha256_nonce_search.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "round": 3,
+          "source_round": 2,
+          "start": 2240000,
+          "attempts": 120000,
+          "target_bits": 18
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.05"
+    },
+    {
+      "id": "verify-round-3",
+      "depends_on": [
+        "verify-round-1",
+        "verify-round-2",
+        "round-3-a",
+        "round-3-b",
+        "round-3-c"
+      ],
+      "program": "verify_nonce_round.cpp",
+      "execution_target": "server",
+      "args": [
+        {
+          "round": 3,
+          "source_round": 2,
+          "target_bits": 18,
+          "write_report": 1
+        }
+      ],
+      "output_artifacts": [
+        {
+          "id": "nonce-report",
+          "file": "nonce_report.txt"
+        }
+      ],
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    }
+  ]
+}
+
+

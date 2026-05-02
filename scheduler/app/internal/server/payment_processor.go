@@ -17,9 +17,16 @@ func adminRequeueInterruptedPaymentsHandler(engine *scheduler.Engine, store *pos
 			return
 		}
 
+		events, err := store.ListPendingPaymentEvents(r.Context())
+		if err != nil {
+			http.Error(w, "failed to load pending payments", http.StatusInternalServerError)
+			return
+		}
+		engine.RestorePendingPayments(events)
+
 		requeued := engine.RequeuePaymentsByStatus(
-			"needs_reconciliation",
-			"retry",
+			scheduler.PaymentStatusReview,
+			scheduler.PaymentStatusRetry,
 			"manually requeued after interrupted processing review",
 		)
 		if err := store.UpsertPaymentEvents(r.Context(), engine.PaymentQueueSnapshot()); err != nil {
@@ -28,32 +35,28 @@ func adminRequeueInterruptedPaymentsHandler(engine *scheduler.Engine, store *pos
 		}
 
 		if requeued > 0 {
-			triggerPaymentProcessingAsync(engine, store)
+			triggerPaymentProcessingAsync(r.Context(), engine, store)
 		}
 
 		writeJSON(w, RequeuePaymentsResponse{RequeuedCount: requeued}, http.StatusOK)
 	}
 }
 
-func triggerPaymentProcessingAsync(engine *scheduler.Engine, store *postgres.Store) {
+func triggerPaymentProcessingAsync(ctx context.Context, engine *scheduler.Engine, store *postgres.Store) {
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+
 	go func() {
-		totalProcessed := 0
-		for {
-			processedCount, err := runPaymentSweep(context.Background(), engine, store)
-			if err != nil {
-				log.Printf("async payment sweep failed: %v", err)
-				return
-			}
-			totalProcessed += processedCount
-
-			if pendingPaymentCount(engine.PaymentQueueSnapshot()) == 0 {
-				if totalProcessed > 0 {
-					log.Printf("async payment sweep processed=%d", totalProcessed)
-				}
-				return
-			}
-
-			time.Sleep(2 * time.Second)
+		processedCount, err := runPaymentSweep(ctx, engine, store)
+		if err != nil {
+			log.Printf("async payment sweep failed: %v", err)
+			return
+		}
+		if processedCount > 0 {
+			log.Printf("async payment sweep processed=%d", processedCount)
 		}
 	}()
 }
@@ -118,18 +121,11 @@ func runPaymentSweep(ctx context.Context, engine *scheduler.Engine, store *postg
 	if err != nil {
 		return processedCount, err
 	}
+	// ProcessPayments persists the intermediate "processing" marker before any
+	// transfer attempt. The full snapshot below persists the final confirmed or
+	// retry states produced after the provider returns.
 	if err := store.UpsertPaymentEvents(ctx, engine.PaymentQueueSnapshot()); err != nil {
 		return processedCount, err
 	}
 	return processedCount, nil
-}
-
-func pendingPaymentCount(events []scheduler.PaymentEvent) int {
-	count := 0
-	for _, event := range events {
-		if event.Status == "pending_x402_transfer" || event.Status == "retry" || event.Status == "processing_x402_transfer" {
-			count++
-		}
-	}
-	return count
 }

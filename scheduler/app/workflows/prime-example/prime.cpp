@@ -1,24 +1,25 @@
-#include <emscripten/emscripten.h>
+#include "../common/workflow.hpp"
 
-static int is_prime(int value) {
+namespace {
+bool is_prime(int value) {
     if (value < 2) {
-        return 0;
+        return false;
     }
     if (value == 2) {
-        return 1;
+        return true;
     }
     if (value % 2 == 0) {
-        return 0;
+        return false;
     }
-    for (int i = 3; (long long)i * i <= value; i += 2) {
+    for (int i = 3; static_cast<long long>(i) * i <= value; i += 2) {
         if (value % i == 0) {
-            return 0;
+            return false;
         }
     }
-    return 1;
+    return true;
 }
 
-static int count_primes_in_range(int start, int end) {
+int count_primes_in_range(int start, int end) {
     if (end < start) {
         return 0;
     }
@@ -30,9 +31,8 @@ static int count_primes_in_range(int start, int end) {
     }
     return count;
 }
+}  // namespace
 
-extern "C" {
-EMSCRIPTEN_KEEPALIVE int run(int start, int end) {
-    return count_primes_in_range(start, end);
-}
+WORKFLOW_NODE(input, output) {
+    output.number(count_primes_in_range(input.int_("start", 1), input.int_("end", 1)));
 }

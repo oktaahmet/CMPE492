@@ -20,10 +20,12 @@ import (
 
 const workerJWTIssuer = "x402-scheduler-worker-auth"
 
+// WorkerAuthChallengeRequest starts wallet ownership verification for a worker.
 type WorkerAuthChallengeRequest struct {
 	WorkerID string `json:"worker_id"`
 }
 
+// WorkerAuthChallengeResponse returns the exact message the wallet must sign.
 type WorkerAuthChallengeResponse struct {
 	WorkerID  string    `json:"worker_id"`
 	Nonce     string    `json:"nonce"`
@@ -31,23 +33,28 @@ type WorkerAuthChallengeResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// WorkerAuthVerifyRequest submits the signed challenge and consumes the nonce.
 type WorkerAuthVerifyRequest struct {
 	WorkerID  string `json:"worker_id"`
 	Nonce     string `json:"nonce"`
 	Signature string `json:"signature"`
 }
 
+// WorkerAuthVerifyResponse is the short-lived bearer token used on worker APIs.
 type WorkerAuthVerifyResponse struct {
 	WorkerID  string    `json:"worker_id"`
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// workerJWTClaims binds a bearer token to one normalized wallet address.
 type workerJWTClaims struct {
 	WorkerID string `json:"worker_id"`
 	jwt.RegisteredClaims
 }
 
+// workerChallenge is kept only in memory; a restart invalidates outstanding
+// login challenges but not already-issued JWTs when WORKER_JWT_SECRET is stable.
 type workerChallenge struct {
 	WorkerID  string
 	Nonce     string
@@ -55,6 +62,8 @@ type workerChallenge struct {
 	ExpiresAt time.Time
 }
 
+// workerAuth owns wallet challenge state and JWT signing/validation. It is safe
+// for concurrent HTTP handlers.
 type workerAuth struct {
 	jwtSecret    []byte
 	tokenTTL     time.Duration
@@ -65,6 +74,8 @@ type workerAuth struct {
 	challenges map[string]workerChallenge
 }
 
+// newWorkerAuth initializes challenge and token lifetimes. If no JWT secret is
+// configured, it generates an ephemeral one suitable only for local/demo runs.
 func newWorkerAuth(jwtSecret string, tokenTTL time.Duration, challengeTTL time.Duration) (*workerAuth, error) {
 	if tokenTTL <= 0 {
 		tokenTTL = 12 * time.Hour
@@ -92,6 +103,8 @@ func newWorkerAuth(jwtSecret string, tokenTTL time.Duration, challengeTTL time.D
 	}, nil
 }
 
+// normalizeWorkerID canonicalizes wallet addresses so comparisons are not
+// affected by input casing or missing checksum formatting.
 func normalizeWorkerID(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -103,14 +116,24 @@ func normalizeWorkerID(raw string) (string, error) {
 	return common.HexToAddress(trimmed).Hex(), nil
 }
 
+// sameWorkerID compares wallet addresses after trimming and ignoring case.
+// Handlers still normalize first where possible, but this keeps replay checks
+// tolerant of equivalent address casing.
 func sameWorkerID(left string, right string) bool {
 	return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right))
 }
 
+// issueChallenge creates a nonce-bound sign-in message and stores it until
+// verification or expiry. Including the request host helps the worker see which
+// scheduler instance is asking for the wallet signature.
 func (a *workerAuth) issueChallenge(workerID string, host string) (WorkerAuthChallengeResponse, error) {
 	normalized, err := normalizeWorkerID(workerID)
 	if err != nil {
 		return WorkerAuthChallengeResponse{}, err
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		host = "unknown"
 	}
 
 	now := a.now().UTC()
@@ -121,7 +144,8 @@ func (a *workerAuth) issueChallenge(workerID string, host string) (WorkerAuthCha
 	}
 
 	message := fmt.Sprintf(
-		"Sign in to x402 scheduler browser worker.\n\nThis is not a blockchain transaction.\nNo gas or funds will be spent.\nThis signature only proves that you control this wallet address.\n\nWallet: %s\nNonce: %s\nIssued At: %s\nExpires At: %s",
+		"Sign in to x402 scheduler browser worker.\n\nThis is not a blockchain transaction.\nNo gas or funds will be spent.\nThis signature only proves that you control this wallet address.\n\nHost: %s\nWallet: %s\nNonce: %s\nIssued At: %s\nExpires At: %s",
+		host,
 		normalized,
 		nonce,
 		now.Format(time.RFC3339),
@@ -146,6 +170,9 @@ func (a *workerAuth) issueChallenge(workerID string, host string) (WorkerAuthCha
 	}, nil
 }
 
+// verifyChallenge checks nonce ownership and consumes it before signature
+// recovery. Consuming first prevents concurrent requests from replaying the
+// same valid challenge into multiple JWTs.
 func (a *workerAuth) verifyChallenge(workerID string, nonce string, signature string) (WorkerAuthVerifyResponse, error) {
 	normalized, err := normalizeWorkerID(workerID)
 	if err != nil {
@@ -167,6 +194,9 @@ func (a *workerAuth) verifyChallenge(workerID string, nonce string, signature st
 	a.mu.Lock()
 	a.cleanupExpiredChallengesLocked(now)
 	challenge, ok := a.challenges[nonce]
+	if ok && sameWorkerID(challenge.WorkerID, normalized) && challenge.ExpiresAt.After(now) {
+		delete(a.challenges, nonce)
+	}
 	a.mu.Unlock()
 
 	if !ok || !sameWorkerID(challenge.WorkerID, normalized) {
@@ -178,12 +208,6 @@ func (a *workerAuth) verifyChallenge(workerID string, nonce string, signature st
 	if err := verifyWalletSignature(challenge.Message, signature, normalized); err != nil {
 		return WorkerAuthVerifyResponse{}, err
 	}
-
-	a.mu.Lock()
-	if current, exists := a.challenges[nonce]; exists && current.Message == challenge.Message && sameWorkerID(current.WorkerID, challenge.WorkerID) {
-		delete(a.challenges, nonce)
-	}
-	a.mu.Unlock()
 
 	token, expiresAt, err := a.issueToken(normalized)
 	if err != nil {
@@ -197,6 +221,8 @@ func (a *workerAuth) verifyChallenge(workerID string, nonce string, signature st
 	}, nil
 }
 
+// issueToken signs the normalized worker wallet into a JWT used by register,
+// pull, result submit, and payment-history endpoints.
 func (a *workerAuth) issueToken(workerID string) (string, time.Time, error) {
 	now := a.now().UTC()
 	expiresAt := now.Add(a.tokenTTL)
@@ -218,6 +244,8 @@ func (a *workerAuth) issueToken(workerID string) (string, time.Time, error) {
 	return signed, expiresAt, nil
 }
 
+// authenticateRequest validates the Authorization bearer token and returns the
+// wallet address encoded in it. Individual handlers compare it to worker_id.
 func (a *workerAuth) authenticateRequest(r *http.Request) (string, error) {
 	header := strings.TrimSpace(r.Header.Get("Authorization"))
 	if header == "" {
@@ -256,6 +284,8 @@ func (a *workerAuth) authenticateRequest(r *http.Request) (string, error) {
 	return normalized, nil
 }
 
+// cleanupExpiredChallengesLocked removes stale nonces. The caller must hold
+// a.mu because this is used inside challenge issue/verify critical sections.
 func (a *workerAuth) cleanupExpiredChallengesLocked(now time.Time) {
 	for nonce, challenge := range a.challenges {
 		if !challenge.ExpiresAt.After(now) {
@@ -264,12 +294,16 @@ func (a *workerAuth) cleanupExpiredChallengesLocked(now time.Time) {
 	}
 }
 
+// verifyWalletSignature recovers the Ethereum address from a personal-sign
+// style signature and compares it with the expected worker wallet.
 func verifyWalletSignature(message string, signatureHex string, expectedWorkerID string) error {
 	signature := common.FromHex(strings.TrimSpace(signatureHex))
 	if len(signature) != 65 {
 		return errors.New("signature must be 65 bytes")
 	}
 
+	// Wallet libraries may return recovery id as 27/28 or 0/1. go-ethereum's
+	// SigToPub expects 0/1, so normalize before recovering the public key.
 	if signature[64] >= 27 {
 		signature[64] -= 27
 	}
@@ -290,6 +324,7 @@ func verifyWalletSignature(message string, signatureHex string, expectedWorkerID
 	return nil
 }
 
+// randomHex returns cryptographically random lowercase hex for nonces.
 func randomHex(byteCount int) (string, error) {
 	buf := make([]byte, byteCount)
 	if _, err := rand.Read(buf); err != nil {
@@ -298,6 +333,7 @@ func randomHex(byteCount int) (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+// workerAuthChallengeHandler exposes POST /api/auth/challenge.
 func workerAuthChallengeHandler(auth *workerAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -320,6 +356,7 @@ func workerAuthChallengeHandler(auth *workerAuth) http.HandlerFunc {
 	}
 }
 
+// workerAuthVerifyHandler exposes POST /api/auth/verify.
 func workerAuthVerifyHandler(auth *workerAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

@@ -1,85 +1,13 @@
 basePath: /
 definitions:
-  main.NodeOutputChunkResponse:
-    properties:
-      data:
-        type: string
-      done:
-        type: boolean
-      items:
-        items: {}
-        type: array
-      limit:
-        type: integer
-      mode:
-        type: string
-      next_offset:
-        type: integer
-      offset:
-        type: integer
-      total_chars:
-        type: integer
-      total_items:
-        type: integer
-    type: object
-  main.RegisterWorkerRequest:
-    properties:
-      worker_id:
-        type: string
-    type: object
-  main.adminWorkflowActivateRequest:
-    properties:
-      reset_state:
-        type: boolean
-      topology_mode:
-        type: string
-      workflow_id:
-        type: string
-    type: object
-  main.adminWorkflowActivateResponse:
-    properties:
-      enqueued_jobs:
-        type: integer
-      recovered_nodes:
-        type: integer
-      reset_state:
-        type: boolean
-      topological_size:
-        type: integer
-      topology_mode:
-        type: string
-      workflow_id:
-        type: string
-    type: object
-  main.adminWorkflowDeleteRequest:
-    properties:
-      workflow_id:
-        type: string
-    type: object
-  main.adminWorkflowDeleteResponse:
-    properties:
-      deleted:
-        type: boolean
-      workflow_id:
-        type: string
-    type: object
-  main.adminWorkflowListResponse:
-    properties:
-      active_workflow_id:
-        type: string
-      loaded_workflow_id:
-        type: string
-      topology_mode:
-        type: string
-      uploaded_ids:
-        items:
-          type: string
-        type: array
-    type: object
   scheduler.Assignment:
     properties:
       args:
         items: {}
+        type: array
+      artifacts:
+        items:
+          $ref: '#/definitions/scheduler.WorkflowArtifact'
         type: array
       dependencies:
         items:
@@ -184,6 +112,97 @@ definitions:
       last_heartbeat:
         type: string
     type: object
+  scheduler.WorkflowArtifact:
+    properties:
+      file:
+        type: string
+      id:
+        type: string
+      path:
+        type: string
+      sha256:
+        type: string
+      size:
+        type: integer
+      url:
+        type: string
+    type: object
+  server.NodeOutputChunkResponse:
+    properties:
+      data:
+        type: string
+      done:
+        type: boolean
+      items:
+        items: {}
+        type: array
+      limit:
+        type: integer
+      mode:
+        type: string
+      next_offset:
+        type: integer
+      offset:
+        type: integer
+      total_chars:
+        type: integer
+      total_items:
+        type: integer
+    type: object
+  server.RegisterWorkerRequest:
+    properties:
+      worker_id:
+        type: string
+    type: object
+  server.adminWorkflowActivateRequest:
+    properties:
+      reset_state:
+        type: boolean
+      topology_mode:
+        type: string
+      workflow_id:
+        type: string
+    type: object
+  server.adminWorkflowActivateResponse:
+    properties:
+      enqueued_jobs:
+        type: integer
+      recovered_nodes:
+        type: integer
+      reset_state:
+        type: boolean
+      topological_size:
+        type: integer
+      topology_mode:
+        type: string
+      workflow_id:
+        type: string
+    type: object
+  server.adminWorkflowDeleteRequest:
+    properties:
+      workflow_id:
+        type: string
+    type: object
+  server.adminWorkflowDeleteResponse:
+    properties:
+      deleted:
+        type: boolean
+      workflow_id:
+        type: string
+    type: object
+  server.adminWorkflowListResponse:
+    properties:
+      active_workflow_id:
+        type: string
+      loaded_workflow_id:
+        type: string
+      topology_mode:
+        type: string
+      uploaded_ids:
+        items:
+          type: string
+        type: array
+    type: object
 host: localhost:8080
 info:
   contact: {}
@@ -205,7 +224,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/main.adminWorkflowListResponse'
+            $ref: '#/definitions/server.adminWorkflowListResponse'
         "401":
           description: Unauthorized
           schema:
@@ -232,14 +251,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/main.adminWorkflowActivateRequest'
+          $ref: '#/definitions/server.adminWorkflowActivateRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/main.adminWorkflowActivateResponse'
+            $ref: '#/definitions/server.adminWorkflowActivateResponse'
         "400":
           description: Bad Request
           schema:
@@ -270,14 +289,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/main.adminWorkflowDeleteRequest'
+          $ref: '#/definitions/server.adminWorkflowDeleteRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/main.adminWorkflowDeleteResponse'
+            $ref: '#/definitions/server.adminWorkflowDeleteResponse'
         "400":
           description: Bad Request
           schema:
@@ -313,6 +332,11 @@ paths:
         name: cpp_files
         required: true
         type: file
+      - description: Optional workflow input artifact files, written under data/ (max
+          10MB each)
+        in: formData
+        name: workflow_input_files
+        type: file
       produces:
       - application/json
       responses:
@@ -337,11 +361,20 @@ paths:
           description: Conflict
           schema:
             type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
       summary: Upload workflow JSON and C++ sources
       tags:
       - admin
   /api/payments:
     get:
+      parameters:
+      - description: Worker ID; inferred from bearer token when worker auth is enabled
+        in: query
+        name: worker_id
+        type: string
       produces:
       - application/json
       responses:
@@ -351,6 +384,10 @@ paths:
             items:
               $ref: '#/definitions/scheduler.PaymentEvent'
             type: array
+        "400":
+          description: Bad Request
+          schema:
+            type: string
         "405":
           description: Method Not Allowed
           schema:
@@ -443,7 +480,7 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/main.RegisterWorkerRequest'
+          $ref: '#/definitions/server.RegisterWorkerRequest'
       produces:
       - application/json
       responses:
@@ -525,7 +562,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/main.NodeOutputChunkResponse'
+            $ref: '#/definitions/server.NodeOutputChunkResponse'
         "400":
           description: Bad Request
           schema:

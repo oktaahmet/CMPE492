@@ -10,6 +10,7 @@ import (
 	"x402-scheduler/internal/storage/postgres"
 )
 
+// healthHandler is a cheap liveness check; it does not touch external systems.
 func healthHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -26,6 +27,8 @@ func healthHandler() http.HandlerFunc {
 	}
 }
 
+// readinessHandler verifies dependencies that must be available before serving
+// real traffic.
 func readinessHandler(store *postgres.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -56,6 +59,8 @@ func readinessHandler(store *postgres.Store) http.HandlerFunc {
 	}
 }
 
+// writeJSON centralizes response encoding so handlers use the same content type
+// and status-code ordering.
 func writeJSON(w http.ResponseWriter, v any, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

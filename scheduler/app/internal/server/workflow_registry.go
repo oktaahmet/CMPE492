@@ -1,13 +1,27 @@
 package server
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"x402-scheduler/internal/scheduler"
 )
+
+const workflowSpecIndexCacheTTL = 5 * time.Second
+
+// workflowSpecIndexCache avoids walking/parsing every workflow JSON for hot
+// lookup paths. Upload/delete operations invalidate it immediately; the short
+// TTL also lets manual filesystem edits appear without restarting the server.
+var workflowSpecIndexCache = struct {
+	sync.Mutex
+	index     map[string]string
+	expiresAt time.Time
+}{}
 
 func discoverWorkflowIDs() ([]string, error) {
 	index, err := discoverWorkflowSpecIndex()
@@ -36,7 +50,25 @@ func resolveWorkflowSpecPathByID(workflowID string) (string, error) {
 }
 
 func discoverWorkflowSpecIndex() (map[string]string, error) {
-	return discoverWorkflowSpecIndexUnder(workflowsRootDir)
+	now := time.Now()
+	workflowSpecIndexCache.Lock()
+	if workflowSpecIndexCache.index != nil && now.Before(workflowSpecIndexCache.expiresAt) {
+		index := cloneWorkflowSpecIndex(workflowSpecIndexCache.index)
+		workflowSpecIndexCache.Unlock()
+		return index, nil
+	}
+	workflowSpecIndexCache.Unlock()
+
+	index, err := discoverWorkflowSpecIndexUnder(workflowsRootDir)
+	if err != nil {
+		return nil, err
+	}
+
+	workflowSpecIndexCache.Lock()
+	workflowSpecIndexCache.index = cloneWorkflowSpecIndex(index)
+	workflowSpecIndexCache.expiresAt = now.Add(workflowSpecIndexCacheTTL)
+	workflowSpecIndexCache.Unlock()
+	return cloneWorkflowSpecIndex(index), nil
 }
 
 func discoverWorkflowSpecIndexUnder(rootDir string) (map[string]string, error) {
@@ -77,8 +109,8 @@ func discoverWorkflowSpecIndexUnder(rootDir string) (map[string]string, error) {
 		}
 
 		if existing, exists := index[normalized.ID]; exists {
-			existingUploaded := isUploadedWorkflowPath(existing)
-			candidateUploaded := isUploadedWorkflowPath(path)
+			existingUploaded := isUploadedWorkflowPath(rootDir, existing)
+			candidateUploaded := isUploadedWorkflowPath(rootDir, path)
 
 			// Uploaded workflows intentionally take precedence over bundled ones,
 			// regardless of traversal order.
@@ -89,6 +121,7 @@ func discoverWorkflowSpecIndexUnder(rootDir string) (map[string]string, error) {
 				index[normalized.ID] = path
 				return nil
 			}
+			return fmt.Errorf("duplicate workflow id %s: %s and %s", normalized.ID, existing, path)
 		}
 		index[normalized.ID] = path
 		return nil
@@ -100,6 +133,24 @@ func discoverWorkflowSpecIndexUnder(rootDir string) (map[string]string, error) {
 	return index, nil
 }
 
-func isUploadedWorkflowPath(path string) bool {
-	return strings.Contains(path, string(filepath.Separator)+"uploaded"+string(filepath.Separator))
+func invalidateWorkflowSpecIndexCache() {
+	workflowSpecIndexCache.Lock()
+	workflowSpecIndexCache.index = nil
+	workflowSpecIndexCache.expiresAt = time.Time{}
+	workflowSpecIndexCache.Unlock()
+}
+
+func cloneWorkflowSpecIndex(index map[string]string) map[string]string {
+	out := make(map[string]string, len(index))
+	for id, path := range index {
+		out[id] = path
+	}
+	return out
+}
+
+func isUploadedWorkflowPath(rootDir string, candidatePath string) bool {
+	// Use a directory-boundary check instead of substring matching so paths like
+	// "not-uploaded" do not accidentally count as uploaded workflows.
+	inside, err := pathInsideDir(candidatePath, filepath.Join(rootDir, "uploaded"))
+	return err == nil && inside
 }

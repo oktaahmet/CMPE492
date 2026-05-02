@@ -21,6 +21,9 @@ import (
 
 const serverExecutionTimeout = 45 * time.Second
 
+// dispatchWorkflowJobs sends browser jobs to the assignment engine and executes
+// trusted server jobs immediately, because server nodes do not need replication
+// or worker-side consensus.
 func dispatchWorkflowJobs(
 	ctx context.Context,
 	engine *scheduler.Engine,
@@ -42,6 +45,9 @@ func dispatchWorkflowJobs(
 	return nil
 }
 
+// executeServerJob runs one trusted server node end to end: prepare declared
+// output files, build the JSON input context, execute the native binary,
+// validate/finalize its output, then advance the workflow.
 func executeServerJob(
 	ctx context.Context,
 	engine *scheduler.Engine,
@@ -71,6 +77,9 @@ func executeServerJob(
 	if len(finalizedArtifacts) > 0 {
 		resultPayload["artifacts"] = artifactMetadataMap(finalizedArtifacts)
 	}
+	if err := scheduler.ValidateResultPayload(resultPayload, job.ResultSchema); err != nil {
+		return fmt.Errorf("server node result schema invalid: %w", err)
+	}
 	acceptedResult, err := hashResultPayload(resultPayload)
 	if err != nil {
 		return err
@@ -78,6 +87,8 @@ func executeServerJob(
 	return persistServerJobCompletion(runCtx, engine, workflowManager, store, job, acceptedResult, resultPayload)
 }
 
+// buildServerExecutionContext mirrors the browser worker input shape, with
+// dependency outputs loaded from durable workflow state.
 func buildServerExecutionContext(
 	ctx context.Context,
 	store *postgres.Store,
@@ -107,6 +118,8 @@ func buildServerExecutionContext(
 }
 
 func serverArtifactContext(artifacts []scheduler.WorkflowArtifact) map[string]any {
+	// Native helpers expect object-shaped "artifacts" and "output_artifacts";
+	// returning an empty map encodes as {}, while nil would encode as null.
 	if len(artifacts) == 0 {
 		return map[string]any{}
 	}
@@ -123,6 +136,9 @@ func serverArtifactContext(artifacts []scheduler.WorkflowArtifact) map[string]an
 	return out
 }
 
+// runNativeServerNode feeds the JSON context to the compiled native companion
+// binary and wraps its stdout JSON in the same result payload envelope browsers
+// submit through /api/result.
 func runNativeServerNode(
 	ctx context.Context,
 	job scheduler.Job,
@@ -163,13 +179,15 @@ func runNativeServerNode(
 	}
 
 	resultPayload := map[string]any{
-		"mode":   fmt.Sprintf("server_run_json(%dB)", len(stdout.Bytes())),
+		"mode":   fmt.Sprintf("server_run_json(%dB)", stdout.Len()),
 		"output": output,
 	}
 
 	return resultPayload, nil
 }
 
+// prepareServerOutputArtifacts resolves declared output files to a controlled
+// workflow-data directory and clears stale files before the native node runs.
 func prepareServerOutputArtifacts(job scheduler.Job) ([]scheduler.WorkflowArtifact, error) {
 	if len(job.OutputArtifacts) == 0 {
 		return nil, nil
@@ -201,6 +219,8 @@ func prepareServerOutputArtifacts(job scheduler.Job) ([]scheduler.WorkflowArtifa
 	return out, nil
 }
 
+// finalizeServerOutputArtifacts verifies that each declared file was written
+// and records metadata exposed to downstream nodes and artifact download APIs.
 func finalizeServerOutputArtifacts(artifacts []scheduler.WorkflowArtifact) ([]scheduler.WorkflowArtifact, error) {
 	if len(artifacts) == 0 {
 		return nil, nil
@@ -240,14 +260,17 @@ func artifactMetadataMap(artifacts []scheduler.WorkflowArtifact) map[string]any 
 }
 
 func hashResultPayload(payload map[string]any) (string, error) {
-	bytes, err := json.Marshal(payload)
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("hash result payload: %w", err)
 	}
-	sum := sha256.Sum256(bytes)
+	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// persistServerJobCompletion stores server output before unlocking children, so
+// downstream jobs can load dependency outputs through the same path as browser
+// finalized nodes.
 func persistServerJobCompletion(
 	ctx context.Context,
 	engine *scheduler.Engine,
@@ -279,6 +302,8 @@ func persistServerJobCompletion(
 	return nil
 }
 
+// nativeExecutablePathFromWasmURL maps a workflow wasm URL to the native binary
+// compiled from the same C++ source for server execution.
 func nativeExecutablePathFromWasmURL(wasmURL string) (string, error) {
 	relOut, err := wasmRelativePathFromURL(wasmURL)
 	if err != nil {

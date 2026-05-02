@@ -145,7 +145,6 @@
           "file": "simulation_report.txt"
         }
       ],
-      "replication_factor": 1,
       "result_schema": {
         "output": {
           "type": "object",
@@ -197,7 +196,6 @@
           "file": "final_brief.txt"
         }
       ],
-      "replication_factor": 1,
       "result_schema": {
         "output": {
           "type": "object",

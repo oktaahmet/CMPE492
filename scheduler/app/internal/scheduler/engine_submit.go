@@ -51,7 +51,7 @@ func (e *Engine) SubmitResult(req ResultSubmission) (Decision, error) {
 	state.submitted[req.WorkerID] = submissionDigest
 	state.submittedPayload[req.WorkerID] = cloneJSONMap(req.ResultPayload)
 
-	requiredReplicas := replicationFactorForJob(state.job, e.cfg.ReplicationFactor)
+	requiredReplicas := replicationFactorForJob(state.job)
 	policy := NormalizeAcceptancePolicy(string(state.job.AcceptancePolicy))
 	acceptedSig, acceptedWorkers := majority(state.submitted)
 	if policy == AcceptancePolicyCollectAll {
@@ -204,7 +204,9 @@ func cloneValue(v any) any {
 	}
 }
 
-func validateResultPayload(payload map[string]any, schema map[string]PayloadFieldRule) error {
+// ValidateResultPayload checks a node result against the workflow-authored
+// result_schema. Browser submissions and trusted server nodes share this logic.
+func ValidateResultPayload(payload map[string]any, schema map[string]PayloadFieldRule) error {
 	if len(schema) == 0 {
 		return nil
 	}
@@ -231,6 +233,10 @@ func validateResultPayload(payload map[string]any, schema map[string]PayloadFiel
 		}
 	}
 	return nil
+}
+
+func validateResultPayload(payload map[string]any, schema map[string]PayloadFieldRule) error {
+	return ValidateResultPayload(payload, schema)
 }
 
 func canonicalSubmissionDigest(payload map[string]any) (string, error) {

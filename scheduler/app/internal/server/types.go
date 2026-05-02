@@ -1,6 +1,37 @@
 package server
 
-import "x402-scheduler/internal/scheduler"
+import (
+	"context"
+
+	"x402-scheduler/internal/scheduler"
+)
+
+type RegisterWorkerRequest struct {
+	WorkerID string `json:"worker_id"`
+}
+
+type RequeuePaymentsResponse struct {
+	RequeuedCount int `json:"requeued_count"`
+}
+
+type NodeOutputChunkResponse struct {
+	Mode       string `json:"mode"`
+	Offset     int    `json:"offset"`
+	Limit      int    `json:"limit"`
+	NextOffset int    `json:"next_offset,omitempty"`
+	Done       bool   `json:"done"`
+
+	TotalItems int    `json:"total_items,omitempty"`
+	TotalChars int    `json:"total_chars,omitempty"`
+	Items      []any  `json:"items,omitempty"`
+	Data       string `json:"data,omitempty"`
+}
+
+type HealthResponse struct {
+	Status    string            `json:"status"`
+	Timestamp string            `json:"timestamp"`
+	Checks    map[string]string `json:"checks,omitempty"`
+}
 
 type adminWorkflowListResponse struct {
 	ActiveWorkflowID string   `json:"active_workflow_id,omitempty"`
@@ -40,4 +71,16 @@ type adminRuntimeResponse struct {
 	Stats            scheduler.Stats                    `json:"stats"`
 	Workflow         *scheduler.WorkflowRuntimeSnapshot `json:"workflow,omitempty"`
 	Jobs             []scheduler.JobRuntimeSnapshot     `json:"jobs,omitempty"`
+}
+
+// workflowOutputStore keeps workflow output handlers testable without requiring
+// a concrete Postgres store.
+type workflowOutputStore interface {
+	LoadWorkflowNodeOutput(ctx context.Context, workflowID string, nodeID string) (map[string]any, bool, error)
+}
+
+// paymentEventStore is the narrow read side needed by the worker payment
+// history endpoint.
+type paymentEventStore interface {
+	ListPaymentEventsForWorker(ctx context.Context, workerID string) ([]scheduler.PaymentEvent, error)
 }

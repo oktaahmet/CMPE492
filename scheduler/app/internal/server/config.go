@@ -11,6 +11,8 @@ import (
 	"x402-scheduler/internal/scheduler"
 )
 
+// loadPaymentProvider builds the x402 payment client from facilitator,
+// Coinbase CDP, network, token, and payer wallet environment variables.
 func loadPaymentProvider() scheduler.PaymentProvider {
 	baseURL := strings.TrimSpace(os.Getenv("X402_FACILITATOR_URL"))
 	apiKeyID := strings.TrimSpace(os.Getenv("CDP_API_KEY_ID"))
@@ -52,23 +54,8 @@ func loadPaymentProvider() scheduler.PaymentProvider {
 	return provider
 }
 
-func loadReplicationFactor() int {
-	const defaultReplicationFactor = 3
-
-	raw := strings.TrimSpace(os.Getenv("REPLICATION_FACTOR"))
-	if raw == "" {
-		log.Printf("replication factor: %d (default)", defaultReplicationFactor)
-		return defaultReplicationFactor
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 1 {
-		log.Printf("invalid REPLICATION_FACTOR=%q, using %d", raw, defaultReplicationFactor)
-		return defaultReplicationFactor
-	}
-	log.Printf("replication factor: %d", n)
-	return n
-}
-
+// loadPostgresDSN returns DATABASE_URL when provided, otherwise builds a DSN
+// from the individual POSTGRES_* variables used by the docker-compose setup.
 func loadPostgresDSN() string {
 	if raw := strings.TrimSpace(os.Getenv("DATABASE_URL")); raw != "" {
 		return raw
@@ -115,10 +102,13 @@ func loadPostgresDSN() string {
 	)
 }
 
+// loadAdminAPIToken reads the bearer token that enables admin endpoints.
+// An empty value disables the admin API routes.
 func loadAdminAPIToken() string {
 	return strings.TrimSpace(os.Getenv("ADMIN_API_TOKEN"))
 }
 
+// loadMaxResultPayloadBytes limits the HTTP request body accepted by /api/result.
 func loadMaxResultPayloadBytes() int64 {
 	const defaultLimit = int64(10 * 1024 * 1024) // 10 MiB
 
@@ -138,6 +128,8 @@ func loadMaxResultPayloadBytes() int64 {
 	return n
 }
 
+// loadPaymentsProcessInterval controls the periodic retry sweep for pending
+// payment events. A zero value disables the background sweep.
 func loadPaymentsProcessInterval() time.Duration {
 	const defaultInterval = 5 * time.Second
 
@@ -162,10 +154,12 @@ func loadPaymentsProcessInterval() time.Duration {
 	return interval
 }
 
+// loadWorkerJWTSecret reads the HMAC secret used to issue browser worker JWTs.
 func loadWorkerJWTSecret() string {
 	return strings.TrimSpace(os.Getenv("WORKER_JWT_SECRET"))
 }
 
+// loadWorkerJWTTTL controls how long a verified worker auth token remains valid.
 func loadWorkerJWTTTL() time.Duration {
 	const defaultTTL = 12 * time.Hour
 
@@ -186,6 +180,8 @@ func loadWorkerJWTTTL() time.Duration {
 	return ttl
 }
 
+// loadWorkerAuthChallengeTTL controls how long wallet-signature login challenges
+// can be used before they expire.
 func loadWorkerAuthChallengeTTL() time.Duration {
 	const defaultTTL = 5 * time.Minute
 
@@ -206,6 +202,8 @@ func loadWorkerAuthChallengeTTL() time.Duration {
 	return ttl
 }
 
+// loadWorkerAuthDisabled enables local/demo mode where worker wallet/JWT checks
+// are skipped. Keep this false for real wallet-authenticated runs.
 func loadWorkerAuthDisabled() bool {
 	raw := strings.TrimSpace(os.Getenv("WORKER_AUTH_DISABLED"))
 	switch strings.ToLower(raw) {

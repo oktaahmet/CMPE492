@@ -49,6 +49,9 @@ func (e *Engine) RestorePendingPayments(events []PaymentEvent) {
 			if strings.TrimSpace(event.LastError) == "" {
 				event.LastError = "restored after interrupted processing; review before retry"
 			}
+		case paymentStatusReview:
+			// Keep manually reviewed/review-pending events in memory so the admin
+			// requeue endpoint can move them back to retry without a direct DB edit.
 		default:
 			continue
 		}

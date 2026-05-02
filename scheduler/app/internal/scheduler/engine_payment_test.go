@@ -25,8 +25,7 @@ func TestEngineProcessPaymentsTransitionsStatuses(t *testing.T) {
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 1,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	engine.SetPaymentProvider(stubPaymentProvider{
 		receipts: map[string]PaymentReceipt{
@@ -88,8 +87,7 @@ func TestEngineProcessPaymentsRevertsProcessingStateWhenPersistFails(t *testing.
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 1,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	engine.SetPaymentProvider(stubPaymentProvider{
 		receipts: map[string]PaymentReceipt{
@@ -135,8 +133,7 @@ func TestEngineRestorePendingPaymentsMarksInterruptedProcessingAndAllowsRequeue(
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 1,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	engine.RestorePendingPayments([]PaymentEvent{
 		{
@@ -155,11 +152,19 @@ func TestEngineRestorePendingPaymentsMarksInterruptedProcessingAndAllowsRequeue(
 			Status:     paymentStatusRetry,
 			UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
 		},
+		{
+			ID:         "evt-review",
+			JobID:      "job-3",
+			WorkflowID: "wf",
+			WorkerID:   "w3",
+			Status:     paymentStatusReview,
+			UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
+		},
 	})
 
 	events := engine.PaymentQueueSnapshot()
-	if len(events) != 2 {
-		t.Fatalf("expected 2 restored events, got %d", len(events))
+	if len(events) != 3 {
+		t.Fatalf("expected 3 restored events, got %d", len(events))
 	}
 
 	byID := map[string]PaymentEvent{}
@@ -169,10 +174,13 @@ func TestEngineRestorePendingPaymentsMarksInterruptedProcessingAndAllowsRequeue(
 	if got := byID["evt-processing"]; got.Status != paymentStatusReview || got.LastError == "" {
 		t.Fatalf("expected interrupted processing event to require review, got %#v", got)
 	}
+	if got := byID["evt-review"]; got.Status != paymentStatusReview {
+		t.Fatalf("expected existing review event to stay requeueable, got %#v", got)
+	}
 
 	requeued := engine.RequeuePaymentsByStatus(paymentStatusReview, paymentStatusRetry, "manual retry")
-	if requeued != 1 {
-		t.Fatalf("expected 1 event to be requeued, got %d", requeued)
+	if requeued != 2 {
+		t.Fatalf("expected 2 events to be requeued, got %d", requeued)
 	}
 
 	events = engine.PaymentQueueSnapshot()
@@ -182,5 +190,8 @@ func TestEngineRestorePendingPaymentsMarksInterruptedProcessingAndAllowsRequeue(
 	}
 	if got := byID["evt-processing"]; got.Status != paymentStatusRetry || got.LastError != "manual retry" {
 		t.Fatalf("expected reviewed event to move back to retry, got %#v", got)
+	}
+	if got := byID["evt-review"]; got.Status != paymentStatusRetry || got.LastError != "manual retry" {
+		t.Fatalf("expected existing review event to move back to retry, got %#v", got)
 	}
 }

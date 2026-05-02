@@ -21,6 +21,8 @@ func paymentsHandler(store paymentEventStore, auth *workerAuth) http.HandlerFunc
 			return
 		}
 		workerID := strings.TrimSpace(r.URL.Query().Get("worker_id"))
+		// When worker auth is enabled, the token owns the payment history scope.
+		// A query worker_id may narrow to the same wallet, never another worker.
 		if auth != nil {
 			authWorkerID, err := auth.authenticateRequest(r)
 			if err != nil {

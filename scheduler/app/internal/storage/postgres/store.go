@@ -373,11 +373,18 @@ func (s *Store) ListPaymentEventsForWorker(ctx context.Context, workerID string)
 
 func (s *Store) ListPendingPaymentEvents(ctx context.Context) ([]scheduler.PaymentEvent, error) {
 	const q = listPaymentEventsSelect + `
-	WHERE status = 'pending_x402_transfer' OR status = 'retry' OR status = 'processing_x402_transfer'
+	WHERE status = $1 OR status = $2 OR status = $3 OR status = $4
 	ORDER BY updated_at ASC, created_at ASC
 	`
 
-	rows, err := s.db.QueryContext(ctx, q)
+	rows, err := s.db.QueryContext(
+		ctx,
+		q,
+		scheduler.PaymentStatusPending,
+		scheduler.PaymentStatusRetry,
+		scheduler.PaymentStatusProcessing,
+		scheduler.PaymentStatusReview,
+	)
 	if err != nil {
 		return nil, err
 	}

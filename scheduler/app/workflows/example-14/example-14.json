@@ -56,7 +56,6 @@
           "expected_score_samples": 3
         }
       ],
-      "replication_factor": 1,
       "result_schema": {
         "output": {
           "type": "object",

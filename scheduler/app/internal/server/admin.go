@@ -2,9 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 
 	"x402-scheduler/internal/scheduler"
@@ -17,6 +20,7 @@ const (
 	uploadedWorkflowFile = "workflow.json"
 	uploadedCPPDirName   = "cpp"
 	maxUploadFilenameLen = 128
+	maxWorkflowInputSize = 10 << 20
 )
 
 // adminWorkflowListHandler godoc
@@ -74,11 +78,13 @@ func adminWorkflowListHandler(
 // @Param        Authorization  header    string  true   "Bearer admin token"
 // @Param        workflow_json  formData  file    true   "Workflow JSON file"
 // @Param        cpp_files      formData  file    true   "One or more C++ files (.cpp)"
+// @Param        workflow_input_files formData file false "Optional workflow input artifact files, written under data/ (max 10MB each)"
 // @Success      201            {object}  map[string]any
 // @Failure      400            {string}  string
 // @Failure      401            {string}  string
 // @Failure      405            {string}  string
 // @Failure      409            {string}  string
+// @Failure      500            {string}  string
 // @Router       /api/admin/workflows/upload [post]
 func adminWorkflowUploadHandler(
 	workflowManager *scheduler.WorkflowManager,
@@ -117,6 +123,7 @@ func adminWorkflowUploadHandler(
 			http.Error(w, "at least one cpp_files part is required", http.StatusBadRequest)
 			return
 		}
+		inputHeaders := r.MultipartForm.File["workflow_input_files"]
 
 		if workflowManager.ActiveWorkflowID() == spec.ID {
 			http.Error(w, "workflow already loaded; activate another workflow first", http.StatusConflict)
@@ -127,7 +134,7 @@ func adminWorkflowUploadHandler(
 			return
 		}
 
-		if err := writeUploadedWorkflow(spec.ID, prettyJSON, cppHeaders); err != nil {
+		if err := writeUploadedWorkflow(spec.ID, prettyJSON, cppHeaders, inputHeaders); err != nil {
 			if cleanupErr := cleanupUploadedWorkflowArtifacts(spec.ID); cleanupErr != nil {
 				log.Printf("failed to cleanup uploaded workflow after write error: workflow_id=%s err=%v", spec.ID, cleanupErr)
 			}
@@ -138,7 +145,9 @@ func adminWorkflowUploadHandler(
 			if cleanupErr := cleanupUploadedWorkflowArtifacts(spec.ID); cleanupErr != nil {
 				log.Printf("failed to cleanup uploaded workflow after compile error: workflow_id=%s err=%v", spec.ID, cleanupErr)
 			}
-			http.Error(w, fmt.Sprintf("workflow uploaded but wasm build failed: %v", err), http.StatusBadRequest)
+			// Uploaded source compile errors are authoring problems, but missing
+			// compilers or filesystem failures are server setup/runtime problems.
+			http.Error(w, fmt.Sprintf("workflow uploaded but artifact build failed: %v", err), workflowBuildErrorStatus(err))
 			return
 		}
 
@@ -148,6 +157,18 @@ func adminWorkflowUploadHandler(
 			"path":        uploadedWorkflowSpecPath(spec.ID),
 		}, http.StatusCreated)
 	}
+}
+
+func workflowBuildErrorStatus(err error) int {
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return http.StatusInternalServerError
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return http.StatusInternalServerError
+	}
+	return http.StatusBadRequest
 }
 
 // adminWorkflowActivateHandler godoc
@@ -273,14 +294,12 @@ func runtimeHandler(
 			Stats:            engine.StatsSnapshot(),
 		}
 
-		targetWorkflowID := loadedID
-		if targetWorkflowID == "" {
-			targetWorkflowID = activeID
-		}
-		if targetWorkflowID != "" && targetWorkflowID == loadedID {
+		// The live graph exists only for the in-memory loaded workflow. activeID
+		// may be persisted even when this process has not loaded that workflow.
+		if loadedID != "" {
 			if snapshot, ok := workflowManager.Snapshot(); ok {
 				resp.Workflow = &snapshot
-				resp.Jobs = engine.WorkflowJobSnapshots(targetWorkflowID)
+				resp.Jobs = engine.WorkflowJobSnapshots(loadedID)
 			}
 		}
 

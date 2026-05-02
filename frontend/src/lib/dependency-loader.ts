@@ -93,7 +93,7 @@ async function reassembleArrayDependency(
     if (chunk.done) {
       return items;
     }
-    offset = typeof chunk.next_offset === "number" ? chunk.next_offset : offset + CHUNKED_DEP_ARRAY_ITEMS;
+    offset = nextChunkOffsetOrThrow(chunk.next_offset, offset, CHUNKED_DEP_ARRAY_ITEMS, workflowID, nodeID);
   }
 }
 
@@ -118,8 +118,24 @@ async function reassembleTextDependency(
     if (chunk.done) {
       return parts.join("");
     }
-    offset = typeof chunk.next_offset === "number" ? chunk.next_offset : offset + CHUNKED_DEP_TEXT_CHARS;
+    offset = nextChunkOffsetOrThrow(chunk.next_offset, offset, CHUNKED_DEP_TEXT_CHARS, workflowID, nodeID);
   }
+}
+
+function nextChunkOffsetOrThrow(
+  nextOffset: number | undefined,
+  currentOffset: number,
+  fallbackStep: number,
+  workflowID: string,
+  nodeID: string,
+): number {
+  const next = typeof nextOffset === "number" ? nextOffset : currentOffset + fallbackStep;
+  if (!Number.isFinite(next) || next <= currentOffset) {
+    throw new Error(
+      `dependency ${workflowID}/${nodeID} chunk offset did not advance: current=${currentOffset} next=${String(nextOffset)}`,
+    );
+  }
+  return next;
 }
 
 function parseChunkedJSON(text: string, workflowID: string, nodeID: string): unknown {

@@ -5,11 +5,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+
+	"x402-scheduler/internal/scheduler"
 )
 
 func sha256File(path string) (string, error) {
@@ -26,6 +29,65 @@ func sha256File(path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// hydrateWorkflowArtifacts resolves workflow-authored input artifacts to local
+// files and fills in runtime metadata. Paths stay relative to the workflow spec
+// directory, so uploaded workflows cannot read arbitrary server files.
+func hydrateWorkflowArtifacts(spec scheduler.WorkflowSpec, specPath string) (scheduler.WorkflowSpec, error) {
+	if len(spec.Artifacts) == 0 {
+		return spec, nil
+	}
+
+	baseDir := filepath.Dir(specPath)
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return scheduler.WorkflowSpec{}, err
+	}
+
+	out := spec
+	out.Artifacts = make([]scheduler.WorkflowArtifact, 0, len(spec.Artifacts))
+	for _, artifact := range spec.Artifacts {
+		localPath := filepath.Join(absBase, filepath.FromSlash(artifact.Path))
+		absPath, err := filepath.Abs(localPath)
+		if err != nil {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s path invalid: %w", artifact.ID, err)
+		}
+		inside, err := pathInsideDir(absPath, absBase)
+		if err != nil {
+			return scheduler.WorkflowSpec{}, err
+		}
+		if !inside {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s path escapes workflow folder", artifact.ID)
+		}
+		info, err := os.Stat(absPath)
+		if err != nil {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s not found: %w", artifact.ID, err)
+		}
+		if info.IsDir() {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s must be a file", artifact.ID)
+		}
+		sum, err := sha256File(absPath)
+		if err != nil {
+			return scheduler.WorkflowSpec{}, fmt.Errorf("artifact %s hash failed: %w", artifact.ID, err)
+		}
+		contentType := strings.TrimSpace(artifact.ContentType)
+		if contentType == "" {
+			contentType = mime.TypeByExtension(filepath.Ext(absPath))
+		}
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		artifact.LocalPath = absPath
+		artifact.Size = info.Size()
+		artifact.SHA256 = sum
+		artifact.ContentType = contentType
+		artifact.URL = workflowArtifactURL(spec.ID, artifact.ID)
+		out.Artifacts = append(out.Artifacts, artifact)
+	}
+	return out, nil
+}
+
+// workflowArtifactURL addresses static input artifacts by workflow and artifact
+// id. Output artifacts include node_id and use outputWorkflowArtifactURL below.
 func workflowArtifactURL(workflowID, artifactID string) string {
 	q := url.Values{}
 	q.Set("workflow_id", workflowID)
@@ -33,6 +95,8 @@ func workflowArtifactURL(workflowID, artifactID string) string {
 	return "/api/workflow/artifact?" + q.Encode()
 }
 
+// outputWorkflowArtifactURL points at a finalized server-node artifact. The
+// handler still verifies that the node output exists before serving the file.
 func outputWorkflowArtifactURL(workflowID, nodeID, artifactID string) string {
 	q := url.Values{}
 	q.Set("workflow_id", workflowID)
@@ -41,6 +105,8 @@ func outputWorkflowArtifactURL(workflowID, nodeID, artifactID string) string {
 	return "/api/workflow/artifact?" + q.Encode()
 }
 
+// outputArtifactLocalPath maps a server node's declared output file into the
+// controlled workflow-data tree and rejects traversal outside that directory.
 func outputArtifactLocalPath(workflowID, nodeID, artifactPath string) (string, error) {
 	workflowID = strings.TrimSpace(workflowID)
 	nodeID = strings.TrimSpace(nodeID)
@@ -77,8 +143,10 @@ func outputArtifactLocalPath(workflowID, nodeID, artifactPath string) (string, e
 	return absPath, nil
 }
 
-func pathInsideDir(path string, root string) (bool, error) {
-	absPath, err := filepath.Abs(path)
+// pathInsideDir reports whether candidatePath is inside root after resolving
+// both paths to absolute filesystem paths.
+func pathInsideDir(candidatePath string, root string) (bool, error) {
+	absPath, err := filepath.Abs(candidatePath)
 	if err != nil {
 		return false, err
 	}
@@ -99,6 +167,7 @@ func pathInsideDir(path string, root string) (bool, error) {
 	return true, nil
 }
 
+// isSafeWorkflowID keeps workflow/node ids usable in URLs and filesystem paths.
 func isSafeWorkflowID(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" {

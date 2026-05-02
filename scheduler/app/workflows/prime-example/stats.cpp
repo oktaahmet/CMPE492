@@ -1,10 +1,7 @@
-#include <emscripten/emscripten.h>
+#include "../common/workflow.hpp"
 
-extern "C" {
-EMSCRIPTEN_KEEPALIVE int run(int start, int end) {
-    if (end < start) {
-        return 0;
-    }
-    return (end - start) + 1;
-}
+WORKFLOW_NODE(input, output) {
+    const int start = input.int_("start", 1);
+    const int end = input.int_("end", start);
+    output.number(end >= start ? end - start + 1 : 0);
 }

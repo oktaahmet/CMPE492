@@ -250,7 +250,13 @@ async function maybeRunSyntheticJob(assignment: Assignment): Promise<WasmWorkerR
       if (chunk.done) {
         break;
       }
-      offset = typeof chunk.next_offset === "number" ? chunk.next_offset : offset + limit;
+      const nextOffset = typeof chunk.next_offset === "number" ? chunk.next_offset : offset + limit;
+      if (!Number.isFinite(nextOffset) || nextOffset <= offset) {
+        throw new Error(
+          `dependency ${dep.workflow_id}/${dep.node_id} chunk offset did not advance: current=${offset} next=${String(chunk.next_offset)}`,
+        );
+      }
+      offset = nextOffset;
     }
   }
 

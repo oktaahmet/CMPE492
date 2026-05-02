@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -74,12 +75,20 @@ func parseAndNormalizeWorkflowJSON(fileHeader *multipart.FileHeader) (scheduler.
 	return normalized, pretty, nil
 }
 
-func writeUploadedWorkflow(workflowID string, workflowJSON []byte, cppHeaders []*multipart.FileHeader) error {
+// writeUploadedWorkflow writes the normalized workflow spec before its source
+// files so later cleanup can remove the whole workflow directory by id.
+func writeUploadedWorkflow(workflowID string, workflowJSON []byte, cppHeaders []*multipart.FileHeader, inputHeaders []*multipart.FileHeader) error {
 	workflowDir := uploadedWorkflowDir(workflowID)
 	cppDir := filepath.Join(workflowDir, uploadedCPPDirName)
+	dataDir := filepath.Join(workflowDir, "data")
 
 	if err := os.MkdirAll(cppDir, 0o755); err != nil {
 		return err
+	}
+	if len(inputHeaders) > 0 {
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			return err
+		}
 	}
 	if err := os.WriteFile(uploadedWorkflowSpecPath(workflowID), workflowJSON, 0o644); err != nil {
 		return err
@@ -95,11 +104,28 @@ func writeUploadedWorkflow(workflowID string, workflowJSON []byte, cppHeaders []
 			return fmt.Errorf("duplicate cpp file name: %s", filename)
 		}
 		seenFilenames[filename] = true
-		if err := writeMultipartFile(header, filepath.Join(cppDir, filename)); err != nil {
+		if err := writeMultipartFileLimited(header, filepath.Join(cppDir, filename), 64<<20); err != nil {
 			return err
 		}
 	}
 
+	seenInputFilenames := make(map[string]bool, len(inputHeaders))
+	for _, header := range inputHeaders {
+		filename, err := sanitizeWorkflowInputFilename(header.Filename)
+		if err != nil {
+			return fmt.Errorf("invalid workflow input file %q: %w", header.Filename, err)
+		}
+		if seenInputFilenames[filename] {
+			return fmt.Errorf("duplicate workflow input file name: %s", filename)
+		}
+		seenInputFilenames[filename] = true
+		if err := writeMultipartFileLimited(header, filepath.Join(dataDir, filename), maxWorkflowInputSize); err != nil {
+			return fmt.Errorf("workflow input file %s: %w", filename, err)
+		}
+	}
+
+	invalidateWorkflowSpecIndexCache()
+	invalidateWorkflowArtifactSpecCache()
 	return nil
 }
 
@@ -131,7 +157,33 @@ func sanitizeUploadFilename(name, requiredExt string) (string, error) {
 	return base, nil
 }
 
-func writeMultipartFile(header *multipart.FileHeader, dstPath string) error {
+func sanitizeWorkflowInputFilename(name string) (string, error) {
+	base := strings.TrimSpace(name)
+	if base == "" || base == "." || base == ".." {
+		return "", fmt.Errorf("filename is empty")
+	}
+	if len(base) > maxUploadFilenameLen {
+		return "", fmt.Errorf("filename is too long")
+	}
+	if strings.IndexByte(base, 0) >= 0 {
+		return "", fmt.Errorf("filename contains null byte")
+	}
+	if strings.ContainsAny(base, `/\`) {
+		return "", fmt.Errorf("filename must not contain path separators")
+	}
+	if filepath.Base(base) != base {
+		return "", fmt.Errorf("filename must be a plain filename")
+	}
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return "", fmt.Errorf("filename must use letters, numbers, dot, underscore or dash")
+	}
+	return base, nil
+}
+
+func writeMultipartFileLimited(header *multipart.FileHeader, dstPath string, maxBytes int64) error {
 	src, err := header.Open()
 	if err != nil {
 		return err
@@ -142,10 +194,24 @@ func writeMultipartFile(header *multipart.FileHeader, dstPath string) error {
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
 
-	if _, err := io.Copy(dst, io.LimitReader(src, 64<<20)); err != nil {
+	limit := maxBytes + 1
+	if limit <= 1 {
+		limit = 1
+	}
+	written, err := io.Copy(dst, io.LimitReader(src, limit))
+	if err != nil {
+		_ = dst.Close()
+		_ = os.Remove(dstPath)
 		return err
+	}
+	if closeErr := dst.Close(); closeErr != nil {
+		_ = os.Remove(dstPath)
+		return closeErr
+	}
+	if written > maxBytes {
+		_ = os.Remove(dstPath)
+		return fmt.Errorf("file exceeds %d bytes", maxBytes)
 	}
 	return nil
 }
@@ -162,8 +228,11 @@ func cleanupUploadedWorkflowArtifacts(workflowID string) error {
 	if strings.TrimSpace(workflowID) == "" {
 		return nil
 	}
-	if err := os.RemoveAll(uploadedWorkflowDir(workflowID)); err != nil {
-		return err
-	}
-	return os.RemoveAll(filepath.Join("static", "uploaded", workflowID))
+	err := errors.Join(
+		os.RemoveAll(uploadedWorkflowDir(workflowID)),
+		os.RemoveAll(filepath.Join("static", "uploaded", workflowID)),
+	)
+	invalidateWorkflowSpecIndexCache()
+	invalidateWorkflowArtifactSpecCache()
+	return err
 }

@@ -19,6 +19,8 @@ func statsHandler(engine *scheduler.Engine) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// StatsSnapshot is already lock-protected inside the engine, so the
+		// handler can return it directly without stitching together state here.
 		writeJSON(w, engine.StatsSnapshot(), http.StatusOK)
 	}
 }

@@ -4,11 +4,14 @@
     {
       "id": "analyze-wikipedia-api",
       "program": "analyze_wikipedia_api.cpp",
+      "execution_target": "browser_worker",
       "args": [
         {
           "timeout_ms": 3000
         }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
       "result_schema": {
         "output": {
           "type": "object",

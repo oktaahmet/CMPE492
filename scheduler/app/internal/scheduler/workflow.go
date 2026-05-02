@@ -443,8 +443,8 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		node.Program = strings.TrimSpace(strings.ReplaceAll(node.Program, "\\", "/"))
 		node.WasmURL = strings.TrimSpace(node.WasmURL)
 		node.RewardUSDC = strings.TrimSpace(node.RewardUSDC)
-		node.AcceptancePolicy = NormalizeAcceptancePolicy(strings.TrimSpace(string(node.AcceptancePolicy)))
-		node.ExecutionTarget = NormalizeExecutionTarget(strings.TrimSpace(string(node.ExecutionTarget)))
+		rawAcceptancePolicy := strings.TrimSpace(string(node.AcceptancePolicy))
+		rawExecutionTarget := strings.TrimSpace(string(node.ExecutionTarget))
 		node.Traits = normalizeTraits(node.Traits)
 		node.UsesArtifacts = normalizeStringList(node.UsesArtifacts)
 		outputArtifacts, outputArtifactIDs, err := normalizeArtifacts(node.OutputArtifacts, "")
@@ -459,9 +459,10 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		if node.WasmURL == "" {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("wasm_url is required for node %s", node.ID)
 		}
-		if !IsValidExecutionTarget(string(node.ExecutionTarget)) {
+		if !IsValidExecutionTarget(rawExecutionTarget) {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s execution_target is invalid", node.ID)
 		}
+		node.ExecutionTarget = NormalizeExecutionTarget(rawExecutionTarget)
 		if node.RewardUSDC == "" {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("reward_usdc is required for node %s", node.ID)
 		}
@@ -474,9 +475,10 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 		if node.ExecutionTarget != ExecutionTargetServer && len(node.OutputArtifacts) > 0 {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s output_artifacts are currently supported only for server execution_target", node.ID)
 		}
-		if !IsValidAcceptancePolicy(string(node.AcceptancePolicy)) {
+		if !IsValidAcceptancePolicy(rawAcceptancePolicy) {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s acceptance_policy is invalid", node.ID)
 		}
+		node.AcceptancePolicy = NormalizeAcceptancePolicy(rawAcceptancePolicy)
 		if len(outputArtifactIDs) != len(node.OutputArtifacts) {
 			return WorkflowSpec{}, nil, nil, fmt.Errorf("node %s output_artifacts contains duplicate ids", node.ID)
 		}

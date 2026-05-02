@@ -2,15 +2,19 @@ package server
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"x402-scheduler/internal/scheduler"
 )
 
+// ensureWorkflowArtifacts compiles every referenced C++ node artifact that is
+// missing or older than its source inputs.
 func ensureWorkflowArtifacts(spec scheduler.WorkflowSpec, specPath string) error {
 	specPath = strings.TrimSpace(specPath)
 	if specPath == "" {
@@ -54,6 +58,8 @@ func ensureWorkflowArtifacts(spec scheduler.WorkflowSpec, specPath string) error
 	return nil
 }
 
+// validateUploadedWorkflowWasmURLs ensures uploaded workflow specs only point at
+// artifacts under their own static/uploaded/<workflow-id> namespace.
 func validateUploadedWorkflowWasmURLs(spec scheduler.WorkflowSpec) error {
 	expectedPrefix := path.Join("uploaded", spec.ID) + "/"
 
@@ -75,6 +81,8 @@ func validateUploadedWorkflowWasmURLs(spec scheduler.WorkflowSpec) error {
 	return nil
 }
 
+// discoverCPPSourceMap maps source stems to .cpp files. Duplicate stems are
+// rejected because they would make wasm_url -> source resolution ambiguous.
 func discoverCPPSourceMap(baseDir string) (map[string]string, error) {
 	baseDir = strings.TrimSpace(baseDir)
 	if baseDir == "" {
@@ -107,10 +115,11 @@ func discoverCPPSourceMap(baseDir string) (map[string]string, error) {
 			if stem == "" {
 				continue
 			}
-			if _, exists := out[stem]; exists {
-				continue
+			sourcePath := filepath.Join(dir, name)
+			if previous, exists := out[stem]; exists {
+				return nil, fmt.Errorf("duplicate cpp source stem %s: %s and %s", stem, previous, sourcePath)
 			}
-			out[stem] = filepath.Join(dir, name)
+			out[stem] = sourcePath
 		}
 	}
 
@@ -120,6 +129,8 @@ func discoverCPPSourceMap(baseDir string) (map[string]string, error) {
 	return out, nil
 }
 
+// wasmRelativePathFromURL converts a public wasm URL into the static relative
+// path used by the compiler and native-binary mapper.
 func wasmRelativePathFromURL(wasmURL string) (string, error) {
 	wasmURL = strings.TrimSpace(wasmURL)
 	if wasmURL == "" {
@@ -137,13 +148,28 @@ func wasmRelativePathFromURL(wasmURL string) (string, error) {
 	if base == "" || !strings.HasPrefix(base, "/") {
 		return "", fmt.Errorf("wasm_url must start with /")
 	}
-	if strings.Contains(base, "..") {
-		return "", fmt.Errorf("wasm_url must not contain ..")
+	decoded, err := url.PathUnescape(base)
+	if err != nil {
+		return "", fmt.Errorf("wasm_url path is not valid url encoding: %w", err)
 	}
-	if strings.ToLower(filepath.Ext(base)) != ".wasm" {
+	decoded = strings.TrimSpace(decoded)
+	if decoded == "" || !strings.HasPrefix(decoded, "/") || strings.IndexByte(decoded, 0) >= 0 || strings.Contains(decoded, "\\") {
+		return "", fmt.Errorf("wasm_url path is invalid")
+	}
+	cleaned := path.Clean(decoded)
+	if cleaned != decoded {
+		return "", fmt.Errorf("wasm_url path must be clean")
+	}
+	rel := strings.TrimPrefix(cleaned, "/")
+	for _, segment := range strings.Split(rel, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", fmt.Errorf("wasm_url path contains invalid segment")
+		}
+	}
+	if strings.ToLower(path.Ext(cleaned)) != ".wasm" {
 		return "", fmt.Errorf("wasm_url must point to .wasm")
 	}
-	return strings.TrimPrefix(base, "/"), nil
+	return rel, nil
 }
 
 func sourceForWasmOutput(relOut string, sourceMap map[string]string) (string, error) {
@@ -156,23 +182,9 @@ func sourceForWasmOutput(relOut string, sourceMap map[string]string) (string, er
 }
 
 func compileCPPToWasmIfNeeded(sourcePath, outputPath string) error {
-	srcInfo, err := os.Stat(sourcePath)
-	if err != nil {
-		return err
-	}
-	if outInfo, err := os.Stat(outputPath); err == nil {
-		if !srcInfo.ModTime().After(outInfo.ModTime()) {
-			return nil
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return err
-	}
-
-	cmd := exec.Command(
+	return compileCommandIfInputsChanged(
+		[]string{sourcePath},
+		outputPath,
 		"emcc",
 		sourcePath,
 		"-O3",
@@ -184,6 +196,40 @@ func compileCPPToWasmIfNeeded(sourcePath, outputPath string) error {
 		"-Wl,--export-all",
 		"-o", outputPath,
 	)
+}
+
+func compileCPPToNativeIfNeeded(sourcePath, outputPath string) error {
+	runnerPath := filepath.Join("workflows", "common", "native_json_runner.cpp")
+	return compileCommandIfInputsChanged(
+		[]string{sourcePath, runnerPath},
+		outputPath,
+		"g++",
+		sourcePath,
+		runnerPath,
+		"-std=c++17",
+		"-O3",
+		"-o", outputPath,
+	)
+}
+
+func compileCommandIfInputsChanged(inputPaths []string, outputPath string, command string, args ...string) error {
+	newestInput, err := newestInputModTime(inputPaths)
+	if err != nil {
+		return err
+	}
+	if outInfo, err := os.Stat(outputPath); err == nil {
+		if !newestInput.After(outInfo.ModTime()) {
+			return nil
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return err
+	}
+
+	cmd := exec.Command(command, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(output))
@@ -195,39 +241,20 @@ func compileCPPToWasmIfNeeded(sourcePath, outputPath string) error {
 	return nil
 }
 
-func compileCPPToNativeIfNeeded(sourcePath, outputPath string) error {
-	srcInfo, err := os.Stat(sourcePath)
-	if err != nil {
-		return err
-	}
-	if outInfo, err := os.Stat(outputPath); err == nil {
-		if !srcInfo.ModTime().After(outInfo.ModTime()) {
-			return nil
-		}
-	} else if !os.IsNotExist(err) {
-		return err
+func newestInputModTime(inputPaths []string) (time.Time, error) {
+	if len(inputPaths) == 0 {
+		return time.Time{}, fmt.Errorf("compiler input paths are required")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return err
-	}
-
-	runnerPath := filepath.Join("workflows", "common", "native_json_runner.cpp")
-	cmd := exec.Command(
-		"g++",
-		sourcePath,
-		runnerPath,
-		"-std=c++17",
-		"-O3",
-		"-o", outputPath,
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(output))
-		if msg == "" {
-			return err
+	var newest time.Time
+	for _, inputPath := range inputPaths {
+		info, err := os.Stat(inputPath)
+		if err != nil {
+			return time.Time{}, err
 		}
-		return fmt.Errorf("%w: %s", err, msg)
+		if newest.IsZero() || info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
 	}
-	return nil
+	return newest, nil
 }

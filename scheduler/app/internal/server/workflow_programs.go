@@ -13,7 +13,22 @@ func resolveWorkflowPrograms(spec scheduler.WorkflowSpec, specPath string) (sche
 	out.Nodes = make([]scheduler.WorkflowNode, len(spec.Nodes))
 	copy(out.Nodes, spec.Nodes)
 
+	needsDerivedURL := false
+	for _, node := range out.Nodes {
+		if strings.TrimSpace(node.Program) != "" && strings.TrimSpace(node.WasmURL) == "" {
+			needsDerivedURL = true
+			break
+		}
+	}
 	prefix := ""
+	if needsDerivedURL {
+		var err error
+		prefix, err = workflowWasmURLPrefixFromSpecPath(specPath)
+		if err != nil {
+			return scheduler.WorkflowSpec{}, err
+		}
+	}
+
 	for i := range out.Nodes {
 		program, err := normalizeNodeProgram(out.Nodes[i].Program)
 		if err != nil {
@@ -26,13 +41,8 @@ func resolveWorkflowPrograms(spec scheduler.WorkflowSpec, specPath string) (sche
 		if strings.TrimSpace(out.Nodes[i].WasmURL) != "" {
 			continue
 		}
-		if prefix == "" {
-			var err error
-			prefix, err = workflowWasmURLPrefixFromSpecPath(specPath)
-			if err != nil {
-				return scheduler.WorkflowSpec{}, err
-			}
-		}
+		// Program names are source filenames; wasm URLs are derived beside the
+		// workflow under static/<workflow-dir>/<program-stem>.wasm.
 		stem := strings.TrimSuffix(program, filepath.Ext(program))
 		out.Nodes[i].WasmURL = prefix + stem + ".wasm?v=1"
 	}
@@ -51,9 +61,20 @@ func normalizeNodeProgram(raw string) (string, error) {
 }
 
 func workflowWasmURLPrefixFromSpecPath(specPath string) (string, error) {
-	rel, err := filepath.Rel(workflowsRootDir, filepath.Dir(strings.TrimSpace(specPath)))
-	if err != nil || rel == "." || rel == "" || strings.HasPrefix(rel, "..") {
+	specPath = strings.TrimSpace(specPath)
+	if specPath == "" {
 		return "", fmt.Errorf("workflow spec path is required")
 	}
-	return "/" + filepath.ToSlash(filepath.Clean(rel)) + "/", nil
+	rel, err := filepath.Rel(workflowsRootDir, filepath.Dir(specPath))
+	if err != nil {
+		return "", fmt.Errorf("workflow spec path is invalid: %w", err)
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." || rel == "" {
+		return "", fmt.Errorf("workflow spec path must be inside a workflow directory")
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("workflow spec path must stay under %s", workflowsRootDir)
+	}
+	return "/" + filepath.ToSlash(rel) + "/", nil
 }

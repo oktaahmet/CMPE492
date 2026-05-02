@@ -9,15 +9,15 @@ func TestEngineAssignNextAllowsReplicationFanout(t *testing.T) {
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 3,
-		AssignmentTTL:     time.Minute,
+		AssignmentTTL: time.Minute,
 	})
 	job := Job{
-		ID:         "job-fanout",
-		WorkflowID: "wf",
-		NodeID:     "n1",
-		WasmURL:    "/job.wasm",
-		RewardUSDC: "0.1",
+		ID:                "job-fanout",
+		WorkflowID:        "wf",
+		NodeID:            "n1",
+		WasmURL:           "/job.wasm",
+		RewardUSDC:        "0.1",
+		ReplicationFactor: 3,
 	}
 	if err := engine.Enqueue(job); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
@@ -42,8 +42,7 @@ func TestEngineCleanupExpiredAssignmentsReleasesStaleAssignments(t *testing.T) {
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 1,
-		AssignmentTTL:     50 * time.Millisecond,
+		AssignmentTTL: 50 * time.Millisecond,
 	})
 	job := Job{
 		ID:         "job-expire",
@@ -82,8 +81,7 @@ func TestEngineRejectsLateSubmitAfterAbandonedAssignmentIsReassigned(t *testing.
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 1,
-		AssignmentTTL:     50 * time.Millisecond,
+		AssignmentTTL: 50 * time.Millisecond,
 	})
 	job := Job{
 		ID:         "job-abandoned",
@@ -152,15 +150,15 @@ func TestEngineSubmittedResultSurvivesWorkerExpiryUntilQuorum(t *testing.T) {
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 3,
-		AssignmentTTL:     50 * time.Millisecond,
+		AssignmentTTL: 50 * time.Millisecond,
 	})
 	job := Job{
-		ID:         "job-submitted-survives",
-		WorkflowID: "wf",
-		NodeID:     "n1",
-		WasmURL:    "/job.wasm",
-		RewardUSDC: "0.1",
+		ID:                "job-submitted-survives",
+		WorkflowID:        "wf",
+		NodeID:            "n1",
+		WasmURL:           "/job.wasm",
+		RewardUSDC:        "0.1",
+		ReplicationFactor: 3,
 		ResultSchema: map[string]PayloadFieldRule{
 			"output": {Type: "number", Required: true},
 		},
@@ -229,8 +227,7 @@ func TestEngineCleanupExpiredAssignmentsPrunesOfflineWorkers(t *testing.T) {
 	t.Parallel()
 
 	engine := NewEngine(Config{
-		ReplicationFactor: 1,
-		AssignmentTTL:     50 * time.Millisecond,
+		AssignmentTTL: 50 * time.Millisecond,
 	})
 
 	engine.RegisterOrHeartbeat("w1")

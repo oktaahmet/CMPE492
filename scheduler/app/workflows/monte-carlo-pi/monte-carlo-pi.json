@@ -1,0 +1,45 @@
+{
+  "id": "wf-monte-carlo-pi",
+  "nodes": [
+    {
+      "id": "pi-worker",
+      "program": "monte_carlo_pi.cpp",
+      "execution_target": "browser_worker",
+      "args": [
+        {
+          "samples": 20000000
+        }
+      ],
+      "replication_factor": 3,
+      "acceptance_policy": "collect_all",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.04"
+    },
+    {
+      "id": "pi-average",
+      "depends_on": [
+        "pi-worker"
+      ],
+      "program": "pi_average.cpp",
+      "execution_target": "server",
+      "output_artifacts": [
+        {
+          "id": "pi-report",
+          "file": "pi_report.txt"
+        }
+      ],
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    }
+  ]
+}

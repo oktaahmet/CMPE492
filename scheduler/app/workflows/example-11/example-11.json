@@ -37,7 +37,6 @@
           "stress_floor_pct": 130
         }
       ],
-      "replication_factor": 1,
       "result_schema": {
         "output": {
           "type": "object",
@@ -89,7 +88,6 @@
           "stress_service_bump_ms": 9
         }
       ],
-      "replication_factor": 1,
       "result_schema": {
         "output": {
           "type": "object",
@@ -164,7 +162,6 @@
           "expected_stress_samples": 5
         }
       ],
-      "replication_factor": 1,
       "result_schema": {
         "output": {
           "type": "object",

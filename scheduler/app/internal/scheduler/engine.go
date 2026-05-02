@@ -6,8 +6,7 @@ import (
 )
 
 type Config struct {
-	ReplicationFactor int
-	AssignmentTTL     time.Duration
+	AssignmentTTL time.Duration
 }
 
 type PaymentProvider interface {
@@ -100,12 +99,23 @@ type PaymentEvent struct {
 	Payer        string `json:"payer,omitempty"`
 }
 
+// Payment status values are persisted in Postgres and exposed through the
+// payment-history API, so server code should reuse these constants instead of
+// duplicating raw strings.
 const (
-	paymentStatusPending    = "pending_x402_transfer"
-	paymentStatusProcessing = "processing_x402_transfer"
-	paymentStatusRetry      = "retry"
-	paymentStatusReview     = "needs_reconciliation"
-	paymentStatusConfirmed  = "confirmed"
+	PaymentStatusPending    = "pending_x402_transfer"
+	PaymentStatusProcessing = "processing_x402_transfer"
+	PaymentStatusRetry      = "retry"
+	PaymentStatusReview     = "needs_reconciliation"
+	PaymentStatusConfirmed  = "confirmed"
+)
+
+const (
+	paymentStatusPending    = PaymentStatusPending
+	paymentStatusProcessing = PaymentStatusProcessing
+	paymentStatusRetry      = PaymentStatusRetry
+	paymentStatusReview     = PaymentStatusReview
+	paymentStatusConfirmed  = PaymentStatusConfirmed
 )
 
 type JobRuntimeSnapshot struct {
@@ -123,9 +133,6 @@ type JobRuntimeSnapshot struct {
 }
 
 func NewEngine(cfg Config) *Engine {
-	if cfg.ReplicationFactor < 1 {
-		cfg.ReplicationFactor = 1
-	}
 	if cfg.AssignmentTTL <= 0 {
 		cfg.AssignmentTTL = 60 * time.Second
 	}

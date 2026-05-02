@@ -20,6 +20,8 @@ func activateWorkflow(
 	workflowManager *scheduler.WorkflowManager,
 	store *postgres.Store,
 ) (adminWorkflowActivateResponse, error) {
+	// Resolve and prepare the spec before touching the live workflow so a bad
+	// upload cannot partially replace the current in-memory runtime.
 	path, err := resolveWorkflowSpecPathByID(workflowID)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -36,6 +38,8 @@ func activateWorkflow(
 		completedOutputs = nil
 	}
 
+	// Probe-load into an isolated manager first. This validates the same
+	// normalized spec and recovered state that will be loaded for real below.
 	probeManager := scheduler.NewWorkflowManager()
 	probeManager.SetTopologyMode(topologyMode)
 	if _, _, err := probeManager.LoadWorkflowWithCompleted(spec, completedOutputs); err != nil {
@@ -43,8 +47,22 @@ func activateWorkflow(
 	}
 
 	current := workflowManager.ActiveWorkflowID()
+	previousPersistedID, err := store.GetActiveWorkflowID(ctx)
+	if err != nil {
+		return adminWorkflowActivateResponse{}, fmt.Errorf("failed to read active workflow id: %w", err)
+	}
+	previousPersistedMode, err := store.GetTopologyMode(ctx)
+	if err != nil {
+		return adminWorkflowActivateResponse{}, fmt.Errorf("failed to read topology mode: %w", err)
+	}
+
+	if err := persistActiveWorkflowMetadata(ctx, store, spec.ID, topologyMode); err != nil {
+		return adminWorkflowActivateResponse{}, err
+	}
+
 	if resetState {
 		if err := store.DeleteWorkflowState(ctx, spec.ID); err != nil {
+			restoreActiveWorkflowMetadata(ctx, store, previousPersistedID, previousPersistedMode)
 			return adminWorkflowActivateResponse{}, fmt.Errorf("failed to reset workflow state: %w", err)
 		}
 	}
@@ -59,18 +77,14 @@ func activateWorkflow(
 	result, jobs, err := workflowManager.LoadWorkflowWithCompleted(spec, completedOutputs)
 	if err != nil {
 		workflowManager.SetTopologyMode(previousMode)
+		restoreActiveWorkflowMetadata(ctx, store, previousPersistedID, previousPersistedMode)
 		return adminWorkflowActivateResponse{}, err
 	}
 	if err := dispatchWorkflowJobs(ctx, engine, workflowManager, store, jobs); err != nil {
 		workflowManager.ClearWorkflow()
 		workflowManager.SetTopologyMode(previousMode)
+		restoreActiveWorkflowMetadata(ctx, store, previousPersistedID, previousPersistedMode)
 		return adminWorkflowActivateResponse{}, err
-	}
-	if err := store.SetActiveWorkflowID(ctx, spec.ID); err != nil {
-		log.Printf("failed to persist active workflow id: %v", err)
-	}
-	if err := store.SetTopologyMode(ctx, string(topologyMode)); err != nil {
-		log.Printf("failed to persist topology mode: %v", err)
 	}
 
 	return adminWorkflowActivateResponse{
@@ -83,6 +97,34 @@ func activateWorkflow(
 	}, nil
 }
 
+func persistActiveWorkflowMetadata(ctx context.Context, store *postgres.Store, workflowID string, topologyMode scheduler.TopologyMode) error {
+	if err := store.SetActiveWorkflowID(ctx, workflowID); err != nil {
+		return fmt.Errorf("failed to persist active workflow id: %w", err)
+	}
+	if err := store.SetTopologyMode(ctx, string(topologyMode)); err != nil {
+		return fmt.Errorf("failed to persist topology mode: %w", err)
+	}
+	return nil
+}
+
+func restoreActiveWorkflowMetadata(ctx context.Context, store *postgres.Store, workflowID string, topologyMode string) {
+	if workflowID == "" {
+		if err := store.ClearActiveWorkflowID(ctx); err != nil {
+			log.Printf("failed to restore empty active workflow id: %v", err)
+		}
+	} else if err := store.SetActiveWorkflowID(ctx, workflowID); err != nil {
+		log.Printf("failed to restore active workflow id: %v", err)
+	}
+	if topologyMode != "" {
+		if err := store.SetTopologyMode(ctx, topologyMode); err != nil {
+			log.Printf("failed to restore topology mode: %v", err)
+		}
+	}
+}
+
+// deleteWorkflow removes only uploaded workflows. Built-in workflow examples are
+// intentionally protected by checking that the resolved spec lives in its upload
+// directory before deleting files.
 func deleteWorkflow(
 	ctx context.Context,
 	workflowID string,
@@ -129,9 +171,14 @@ func deleteWorkflow(
 		return err
 	}
 	_ = os.RemoveAll(filepath.Join("static", "uploaded", workflowID))
+	invalidateWorkflowSpecIndexCache()
+	invalidateWorkflowArtifactSpecCache()
 	return nil
 }
 
+// loadWorkflowFromPath is the boot-time loader. It prepares the spec, replays
+// persisted node outputs, loads the in-memory DAG, and dispatches any nodes that
+// become runnable after recovery.
 func loadWorkflowFromPath(
 	ctx context.Context,
 	path string,
@@ -159,6 +206,9 @@ func loadWorkflowFromPath(
 	return normalized, result, len(completedOutputs), nil
 }
 
+// prepareWorkflowLoad performs all file/database work needed before a workflow
+// can be loaded: read JSON, resolve program paths, validate, hydrate artifacts,
+// build missing wasm outputs, and recover completed node outputs.
 func prepareWorkflowLoad(
 	ctx context.Context,
 	path string,

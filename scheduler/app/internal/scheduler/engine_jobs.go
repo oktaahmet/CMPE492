@@ -68,7 +68,7 @@ func (e *Engine) AssignNext(workerID string) (Assignment, bool) {
 		if _, alreadySubmitted := state.submitted[workerID]; alreadySubmitted {
 			continue
 		}
-		requiredReplicas := replicationFactorForJob(state.job, e.cfg.ReplicationFactor)
+		requiredReplicas := replicationFactorForJob(state.job)
 		if len(state.assignments)+len(state.submitted) >= requiredReplicas {
 			continue
 		}
@@ -213,7 +213,7 @@ func (e *Engine) WorkflowJobSnapshots(workflowID string) []JobRuntimeSnapshot {
 		sort.Strings(submittedWorkers)
 
 		acceptedWorkers := acceptedWorkersForState(state)
-		requiredReplicas := replicationFactorForJob(state.job, e.cfg.ReplicationFactor)
+		requiredReplicas := replicationFactorForJob(state.job)
 		out = append(out, JobRuntimeSnapshot{
 			JobID:            jobID,
 			WorkflowID:       state.job.WorkflowID,
@@ -250,7 +250,7 @@ func (e *Engine) buildDecision(state *jobState) Decision {
 		AcceptedResult:   sig,
 		AcceptedPayload:  cloneJSONMap(state.acceptedPayload),
 		AcceptedWorkers:  count,
-		RequiredReplicas: replicationFactorForJob(state.job, e.cfg.ReplicationFactor),
+		RequiredReplicas: replicationFactorForJob(state.job),
 	}
 }
 
@@ -347,12 +347,9 @@ func resetSubmissionRoundLocked(state *jobState) {
 	state.submittedPayload = map[string]map[string]any{}
 }
 
-func replicationFactorForJob(job Job, fallback int) int {
+func replicationFactorForJob(job Job) int {
 	if job.ReplicationFactor > 0 {
 		return job.ReplicationFactor
-	}
-	if fallback > 0 {
-		return fallback
 	}
 	return 1
 }

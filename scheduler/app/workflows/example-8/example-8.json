@@ -4,11 +4,14 @@
     {
       "id": "emit-text",
       "program": "emit_text.cpp",
+      "execution_target": "browser_worker",
       "args": [
         {
           "repeat": 8
         }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
       "result_schema": {
         "output": {
           "type": "string",
@@ -23,11 +26,14 @@
         "emit-text"
       ],
       "program": "summarize_text.cpp",
+      "execution_target": "browser_worker",
       "args": [
         {
           "passes": 2
         }
       ],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
       "result_schema": {
         "output": {
           "type": "string",
