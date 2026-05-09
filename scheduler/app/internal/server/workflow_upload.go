@@ -130,7 +130,8 @@ func writeUploadedWorkflow(workflowID string, workflowJSON []byte, cppHeaders []
 }
 
 func sanitizeUploadFilename(name, requiredExt string) (string, error) {
-	base := strings.TrimSpace(filepath.Base(name))
+	normalizedName := strings.ReplaceAll(name, "\\", "/")
+	base := strings.TrimSpace(filepath.Base(normalizedName))
 	if base == "" || base == "." || base == ".." {
 		return "", fmt.Errorf("filename is empty")
 	}

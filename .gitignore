@@ -3,6 +3,8 @@
 .env.*
 
 !.env-example
+!.env.production.example
+!.env.e2e.example
 
 venv
 **/__pycache__
@@ -14,6 +16,12 @@ db.sqlite3
 media/
 staticfiles/
 scheduler/app/workflow-data/
+scheduler/app/.emscripten-cache/
+scheduler/app/.gocache/
+scheduler/app/native/
+scheduler/app/static/
+scheduler/app/simulation_report.txt
+frontend/dist/
 
 
 .vscode/
