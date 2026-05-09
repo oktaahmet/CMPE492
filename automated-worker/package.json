@@ -4,7 +4,6 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "e2e:smoke": "node ./e2e-smoke.mjs",
     "workers:browser": "node ./spawn-browser-workers.mjs",
     "playwright:install": "playwright install chromium"
   },
