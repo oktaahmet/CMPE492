@@ -1,0 +1,14 @@
+{
+  "name": "x402-scheduler-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "smoke": "node ./workflow-e2e.mjs",
+    "workflow": "node ./workflow-e2e.mjs --workflow-id wf-mini-text-demo-008 --reset-workflow --worker-count 4 --require-worker-progress --expect-new-finalized 2 --expect-workflow-complete --min-finalized-jobs 2 --expect-payments --timeout-ms 120000 --worker-timeout-ms 120000",
+    "playwright:install": "playwright install chromium"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}

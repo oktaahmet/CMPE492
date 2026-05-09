@@ -1,0 +1,5 @@
+services:
+  scheduler:
+    environment:
+      WORKER_AUTH_DISABLED: "1"
+      WORKFLOW_BOOT_FILE: workflows/example-8/example-8.json
