@@ -28,7 +28,7 @@ func Main() {
 	// progression. Durable workflow/payment state is restored from Postgres
 	// below before routes are registered.
 	engine := scheduler.NewEngine(scheduler.Config{
-		AssignmentTTL: 30 * time.Second,
+		AssignmentTTL: loadAssignmentTTL(),
 	})
 	workflowManager := scheduler.NewWorkflowManager()
 	engine.SetPaymentProvider(loadPaymentProvider())

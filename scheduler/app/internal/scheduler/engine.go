@@ -110,14 +110,6 @@ const (
 	PaymentStatusConfirmed  = "confirmed"
 )
 
-const (
-	paymentStatusPending    = PaymentStatusPending
-	paymentStatusProcessing = PaymentStatusProcessing
-	paymentStatusRetry      = PaymentStatusRetry
-	paymentStatusReview     = PaymentStatusReview
-	paymentStatusConfirmed  = PaymentStatusConfirmed
-)
-
 type JobRuntimeSnapshot struct {
 	JobID            string           `json:"job_id"`
 	WorkflowID       string           `json:"workflow_id"`

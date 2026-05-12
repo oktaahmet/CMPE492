@@ -1,13 +1,9 @@
-#include <climits>
 #include <cstdint>
 #include <cstdio>
 
-#include "../common/runtime_artifacts.hpp"
-#include "../common/runtime_json.hpp"
-#include "../common/runtime_node.hpp"
+#include "../common/workflow.hpp"
 
 namespace {
-constexpr int kURLCap = 1024;
 constexpr int kNumberCount = 1000000;
 constexpr int kNumbersBytes = kNumberCount * 4;
 constexpr int kHashRounds = 2048;
@@ -51,21 +47,22 @@ void append_match(char* out, int cap, int& len, int index, uint32_t input, uint6
 }
 }  // namespace
 
-WORKFLOW_JSON_NODE(64 * 1024, 96 * 1024)
-
-int workflow_run_json(const char* input, int input_len, char* output, int output_cap, int& output_len) {
-    const int range_start = static_cast<int>(runtime_json::extract_named_int(input, input_len, "range_start", 0));
-    const int range_count = static_cast<int>(runtime_json::extract_named_int(input, input_len, "range_count", 250000));
+WORKFLOW_NODE_WITH_CAPS(input, output, 64 * 1024, 96 * 1024) {
+    const int range_start = input.int_("range_start", 0);
+    const int range_count = input.int_("range_count", 250000);
     if (range_start < 0 || range_count <= 0 || range_start + range_count > kNumberCount) {
-        return 2;
+        output.fail(30);
+        return;
     }
 
-    char url[kURLCap];
-    const runtime_artifacts::BytesArtifact file =
-        runtime_artifacts::fetch_bytes(input, input_len, "numbers-bin", g_numbers, kNumbersBytes, 10000, url, kURLCap);
+    const auto file = input.artifact("numbers-bin").fetch_bytes(g_numbers, kNumbersBytes, 10000);
     if (!file.ok || file.bytes != kNumbersBytes) {
-        output_len = runtime_artifacts::write_fetch_error(output, output_cap, file);
-        return 0;
+        auto err = output.object();
+        err.field("ok", false);
+        err.field("fetch_error_code", file.error_code);
+        err.field("http_status", file.http_status);
+        err.done();
+        return;
     }
 
     int match_count = 0;
@@ -81,13 +78,11 @@ int workflow_run_json(const char* input, int input_len, char* output, int output
     }
     g_matches[matches_len] = '\0';
 
-    runtime_json::JsonWriter json(output, output_cap);
-    json.begin_object();
+    auto json = output.object();
     json.field("range_start", range_start);
     json.field("range_count", range_count);
     json.field("processed", range_count);
     json.field("match_count", match_count);
     json.field("matches", g_matches);
-    output_len = json.end_object();
-    return json.ok() ? 0 : 3;
+    json.done();
 }

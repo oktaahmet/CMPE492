@@ -6,6 +6,9 @@
   "scripts": {
     "smoke": "node ./workflow-e2e.mjs",
     "workflow": "node ./workflow-e2e.mjs --workflow-id wf-mini-text-demo-008 --reset-workflow --worker-count 4 --require-worker-progress --expect-new-finalized 2 --expect-workflow-complete --min-finalized-jobs 2 --expect-payments --timeout-ms 120000 --worker-timeout-ms 120000",
+    "benchmark": "node ./benchmark.mjs",
+    "load-test": "node ./load-test.mjs",
+    "load-synthetic-500": "node ./load-test.mjs --workflow-id wf-synthetic-load-500 --worker-counts 500 --api-workers --synthetic-delay-ms 5000 --synthetic-payload-bytes 8192 --poll-ms 250 --sla-ms 10000 --timeout-ms 120000",
     "playwright:install": "playwright install chromium"
   },
   "devDependencies": {

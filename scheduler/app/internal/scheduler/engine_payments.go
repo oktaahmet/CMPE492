@@ -41,15 +41,15 @@ func (e *Engine) RestorePendingPayments(events []PaymentEvent) {
 
 	for _, event := range events {
 		switch event.Status {
-		case paymentStatusPending, paymentStatusRetry:
-		case paymentStatusProcessing:
+		case PaymentStatusPending, PaymentStatusRetry:
+		case PaymentStatusProcessing:
 			// A previous process may have crashed after marking work as processing.
 			// Do not blindly retry it; surface it for explicit reconciliation first.
-			event.Status = paymentStatusReview
+			event.Status = PaymentStatusReview
 			if strings.TrimSpace(event.LastError) == "" {
 				event.LastError = "restored after interrupted processing; review before retry"
 			}
-		case paymentStatusReview:
+		case PaymentStatusReview:
 			// Keep manually reviewed/review-pending events in memory so the admin
 			// requeue endpoint can move them back to retry without a direct DB edit.
 		default:
@@ -113,7 +113,7 @@ func (e *Engine) ProcessPayments(persistIntermediate func([]PaymentEvent) error)
 	startedAt := time.Now().UTC().Format(time.RFC3339)
 	for i := range e.paymentEvents {
 		event := &e.paymentEvents[i]
-		if event.Status != paymentStatusPending && event.Status != paymentStatusRetry {
+		if event.Status != PaymentStatusPending && event.Status != PaymentStatusRetry {
 			continue
 		}
 		items = append(items, workItem{
@@ -122,7 +122,7 @@ func (e *Engine) ProcessPayments(persistIntermediate func([]PaymentEvent) error)
 			event: *event,
 			prev:  *event,
 		})
-		event.Status = paymentStatusProcessing
+		event.Status = PaymentStatusProcessing
 		event.UpdatedAt = startedAt
 		event.LastError = ""
 	}
@@ -149,7 +149,7 @@ func (e *Engine) ProcessPayments(persistIntermediate func([]PaymentEvent) error)
 					continue
 				}
 				event := &e.paymentEvents[item.index]
-				if event.ID != item.id || event.Status != paymentStatusProcessing {
+				if event.ID != item.id || event.Status != PaymentStatusProcessing {
 					continue
 				}
 				*event = item.prev
@@ -191,18 +191,18 @@ func (e *Engine) ProcessPayments(persistIntermediate func([]PaymentEvent) error)
 		if event.ID != result.id {
 			continue
 		}
-		if event.Status != paymentStatusProcessing {
+		if event.Status != PaymentStatusProcessing {
 			continue
 		}
 		event.Attempts++
 		event.UpdatedAt = finishedAt
 		if result.err != nil {
-			event.Status = paymentStatusRetry
+			event.Status = PaymentStatusRetry
 			event.LastError = result.err.Error()
 			continue
 		}
 
-		event.Status = paymentStatusConfirmed
+		event.Status = PaymentStatusConfirmed
 		event.LastError = ""
 		event.TxHash = result.receipt.TxHash
 		event.Network = result.receipt.Network
@@ -228,7 +228,7 @@ func (e *Engine) appendMissingPaymentEventsLocked(job Job, acceptedSig string, w
 			AmountUSDC:   job.RewardUSDC,
 			WorkerID:     workerID,
 			AcceptedHash: acceptedSig,
-			Status:       paymentStatusPending,
+			Status:       PaymentStatusPending,
 			UpdatedAt:    now,
 		})
 	}

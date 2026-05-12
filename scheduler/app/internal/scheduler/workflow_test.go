@@ -58,6 +58,62 @@ func TestValidateWorkflowSpecDefaultsExecutionTargetToBrowserWorker(t *testing.T
 	}
 }
 
+func TestValidateWorkflowSpecExpandsShardedNodesAndDependencies(t *testing.T) {
+	spec, err := ValidateWorkflowSpec(WorkflowSpec{
+		ID: "wf-sharded-validation-test",
+		Nodes: []WorkflowNode{
+			{ID: "prepare", WasmURL: "/prepare.wasm", RewardUSDC: "0.01"},
+			{
+				ID:                "prime-shard",
+				DependsOn:         []string{"prepare"},
+				WasmURL:           "/prime.wasm",
+				Args:              []any{map[string]any{"range_size": 1000}},
+				ShardCount:        3,
+				ReplicationFactor: 3,
+				AcceptancePolicy:  AcceptancePolicyConsensus,
+				RewardUSDC:        "0.02",
+			},
+			{ID: "reduce", DependsOn: []string{"prime-shard"}, WasmURL: "/reduce.wasm", RewardUSDC: "0.01"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ValidateWorkflowSpec returned error: %v", err)
+	}
+
+	gotIDs := make([]string, 0, len(spec.Nodes))
+	byID := map[string]WorkflowNode{}
+	for _, node := range spec.Nodes {
+		gotIDs = append(gotIDs, node.ID)
+		byID[node.ID] = node
+	}
+	wantIDs := []string{"prepare", "prime-shard-0", "prime-shard-1", "prime-shard-2", "reduce"}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("expected expanded node ids %#v, got %#v", wantIDs, gotIDs)
+	}
+
+	for i, nodeID := range []string{"prime-shard-0", "prime-shard-1", "prime-shard-2"} {
+		node := byID[nodeID]
+		if node.ShardCount != 0 {
+			t.Fatalf("expected expanded node %s to clear shard_count, got %d", nodeID, node.ShardCount)
+		}
+		if !reflect.DeepEqual(node.DependsOn, []string{"prepare"}) {
+			t.Fatalf("expected %s to depend on prepare, got %#v", nodeID, node.DependsOn)
+		}
+		args, ok := node.Args[0].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %s first arg to be an object, got %#v", nodeID, node.Args)
+		}
+		if args["range_size"] != 1000 || args["shard_index"] != i {
+			t.Fatalf("unexpected args for %s: %#v", nodeID, args)
+		}
+	}
+
+	wantReduceDeps := []string{"prime-shard-0", "prime-shard-1", "prime-shard-2"}
+	if !reflect.DeepEqual(byID["reduce"].DependsOn, wantReduceDeps) {
+		t.Fatalf("expected reducer deps %#v, got %#v", wantReduceDeps, byID["reduce"].DependsOn)
+	}
+}
+
 func TestValidateWorkflowSpecRejectsInvalidNodeModes(t *testing.T) {
 	t.Parallel()
 
@@ -264,6 +320,77 @@ func TestWorkflowManagerPriorityAwareModeOrdersReadyNodes(t *testing.T) {
 	}
 	if len(jobs) != 2 || jobs[0].NodeID != "high" || jobs[1].NodeID != "low" {
 		t.Fatalf("expected ready jobs to follow priority order, got %#v", jobs)
+	}
+}
+
+func TestWorkflowManagerLoadsExpandedShardsAsIndependentJobs(t *testing.T) {
+	t.Parallel()
+
+	manager := NewWorkflowManager()
+	result, jobs, err := manager.LoadWorkflow(WorkflowSpec{
+		ID: "wf-sharded-runtime-test",
+		Nodes: []WorkflowNode{
+			{
+				ID:                "prime-shard",
+				WasmURL:           "/prime.wasm",
+				Args:              []any{map[string]any{"range_size": 1000}},
+				ShardCount:        3,
+				ReplicationFactor: 3,
+				AcceptancePolicy:  AcceptancePolicyConsensus,
+				RewardUSDC:        "0.02",
+			},
+			{
+				ID:         "reduce",
+				DependsOn:  []string{"prime-shard"},
+				WasmURL:    "/reduce.wasm",
+				RewardUSDC: "0.01",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadWorkflow() error = %v", err)
+	}
+
+	wantReady := []string{"prime-shard-0", "prime-shard-1", "prime-shard-2"}
+	if !reflect.DeepEqual(result.EnqueuedNodes, wantReady) {
+		t.Fatalf("expected expanded shards to enqueue first, got %#v", result.EnqueuedNodes)
+	}
+	if len(jobs) != 3 {
+		t.Fatalf("expected 3 shard jobs, got %#v", jobs)
+	}
+	for i, job := range jobs {
+		if job.NodeID != wantReady[i] || job.ReplicationFactor != 3 || job.AcceptancePolicy != AcceptancePolicyConsensus {
+			t.Fatalf("unexpected shard job %d: %#v", i, job)
+		}
+		args, ok := job.Args[0].(map[string]any)
+		if !ok || args["shard_index"] != i {
+			t.Fatalf("expected shard_index %d in job args, got %#v", i, job.Args)
+		}
+	}
+
+	next, err := manager.OnJobFinalized("wf-sharded-runtime-test:prime-shard-0", map[string]any{"output": []any{}})
+	if err != nil {
+		t.Fatalf("OnJobFinalized(first shard) error = %v", err)
+	}
+	if len(next) != 0 {
+		t.Fatalf("reducer should wait for all shards, got %#v", next)
+	}
+	if _, err := manager.OnJobFinalized("wf-sharded-runtime-test:prime-shard-1", map[string]any{"output": []any{}}); err != nil {
+		t.Fatalf("OnJobFinalized(second shard) error = %v", err)
+	}
+	next, err = manager.OnJobFinalized("wf-sharded-runtime-test:prime-shard-2", map[string]any{"output": []any{}})
+	if err != nil {
+		t.Fatalf("OnJobFinalized(third shard) error = %v", err)
+	}
+	if len(next) != 1 || next[0].NodeID != "reduce" {
+		t.Fatalf("expected reducer after all shards finalize, got %#v", next)
+	}
+	gotDeps := make([]string, 0, len(next[0].Dependencies))
+	for _, dep := range next[0].Dependencies {
+		gotDeps = append(gotDeps, dep.NodeID)
+	}
+	if !reflect.DeepEqual(gotDeps, wantReady) {
+		t.Fatalf("expected reducer deps %#v, got %#v", wantReady, gotDeps)
 	}
 }
 

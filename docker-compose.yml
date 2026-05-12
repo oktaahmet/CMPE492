@@ -25,7 +25,12 @@ services:
       - db
     env_file:
       - .env
-    
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   frontend:
     image: x402-frontend:dev
     build:
@@ -39,7 +44,8 @@ services:
       - ./frontend:/app
       - frontend_modules:/app/node_modules
     depends_on:
-      - scheduler
+      scheduler:
+        condition: service_healthy
 
 volumes:
   postgres_data:

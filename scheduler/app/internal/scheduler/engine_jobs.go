@@ -168,7 +168,7 @@ func (e *Engine) StatsSnapshot() Stats {
 
 	pendingPayments := 0
 	for _, p := range e.paymentEvents {
-		if p.Status == paymentStatusPending || p.Status == paymentStatusRetry || p.Status == paymentStatusProcessing {
+		if p.Status == PaymentStatusPending || p.Status == PaymentStatusRetry || p.Status == PaymentStatusProcessing {
 			pendingPayments++
 		}
 	}

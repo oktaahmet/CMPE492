@@ -15,6 +15,29 @@
 
 namespace workflow {
 
+// Stable error codes returned to the scheduler when a node aborts.
+// Values 1-29 are reserved for the runtime; user nodes should use 30+
+// when calling output.fail() to avoid collisions.
+namespace errors {
+constexpr int kObjectFieldMissing   = 2;
+constexpr int kStringFieldMissing   = 3;
+constexpr int kCharFieldInvalid     = 4;
+constexpr int kNumberFieldMissing   = 5;
+constexpr int kNumbersFieldEmpty    = 6;
+constexpr int kFetchUrlInvalid      = 7;
+constexpr int kFetchFailed          = 8;
+constexpr int kInputNodeMissing     = 9;
+constexpr int kInputArtifactMissing = 10;
+constexpr int kInputArgsMissing     = 11;
+constexpr int kOutputNumberTooLong  = 20;
+constexpr int kOutputNullFailed     = 21;
+constexpr int kOutputTextTooLong    = 22;
+constexpr int kOutputArrayBegin     = 23;
+constexpr int kOutputArrayElement   = 24;
+constexpr int kOutputArrayEnd       = 25;
+constexpr int kOutputObjectFailed   = 26;
+}  // namespace errors
+
 struct Status {
     int code = 0;
 
@@ -203,6 +226,25 @@ inline void collect_number_fields(std::string_view object, const char* key, std:
     }
 }
 
+inline void collect_string_fields(std::string_view object, const char* key, std::vector<std::string_view>& out) {
+    const char* data = object.data();
+    const int len = static_cast<int>(object.size());
+    int offset = 0;
+    while (offset < len) {
+        const char* ptr = nullptr;
+        const int found = runtime_json::extract_named_string(data + offset, len - offset, key, &ptr);
+        if (found <= 0 || ptr == nullptr) {
+            break;
+        }
+        out.emplace_back(ptr, static_cast<size_t>(found));
+        const int next = static_cast<int>(ptr - data) + found + 1;
+        if (next <= offset) {
+            break;
+        }
+        offset = next;
+    }
+}
+
 inline void parse_number_array(std::string_view array, std::vector<int>& out) {
     const char* data = array.data();
     const int len = static_cast<int>(array.size());
@@ -257,7 +299,7 @@ class Object {
     Object object(const char* key) const {
         const std::string_view value = detail::object_field(data_, key);
         if (value.empty() && status_) {
-            status_->fail(2);
+            status_->fail(errors::kObjectFieldMissing);
         }
         return Object(value, status_);
     }
@@ -265,7 +307,7 @@ class Object {
     std::string_view string(const char* key) const {
         const std::string_view value = detail::string_field(data_, key);
         if (value.empty() && status_) {
-            status_->fail(3);
+            status_->fail(errors::kStringFieldMissing);
         }
         return value;
     }
@@ -274,7 +316,7 @@ class Object {
         const std::string_view value = string(key);
         if (value.size() != 1) {
             if (status_) {
-                status_->fail(4);
+                status_->fail(errors::kCharFieldInvalid);
             }
             return '\0';
         }
@@ -288,7 +330,7 @@ class Object {
     long long number(const char* key, long long fallback = 0) const {
         long long value = fallback;
         if (!detail::first_number_field(data_, key, value) && status_) {
-            status_->fail(5);
+            status_->fail(errors::kNumberFieldMissing);
         }
         return value;
     }
@@ -297,7 +339,16 @@ class Object {
         std::vector<long long> out;
         detail::collect_number_fields(data_, key, out);
         if (out.empty() && status_) {
-            status_->fail(6);
+            status_->fail(errors::kNumbersFieldEmpty);
+        }
+        return out;
+    }
+
+    std::vector<std::string_view> strings(const char* key) const {
+        std::vector<std::string_view> out;
+        detail::collect_string_fields(data_, key, out);
+        if (out.empty() && status_) {
+            status_->fail(errors::kStringFieldMissing);
         }
         return out;
     }
@@ -312,7 +363,7 @@ class Object {
         const std::string_view url = string("url");
         if (url.empty() || url.size() >= 2048) {
             if (status_) {
-                status_->fail(7);
+                status_->fail(errors::kFetchUrlInvalid);
             }
             return {false, 0, 0, runtime_browser::FETCH_INVALID_URL, out};
         }
@@ -323,7 +374,27 @@ class Object {
 
         const runtime_browser::FetchResult fetched = runtime_browser::get(url_buf, out, out_cap, timeout_ms);
         if (!fetched.ok && status_) {
-            status_->fail(8);
+            status_->fail(errors::kFetchFailed);
+        }
+        return fetched;
+    }
+
+    runtime_browser::FetchResult fetch_bytes(unsigned char* out, int out_cap, int timeout_ms = 3000) const {
+        const std::string_view url = string("url");
+        if (url.empty() || url.size() >= 2048) {
+            if (status_) {
+                status_->fail(errors::kFetchUrlInvalid);
+            }
+            return {false, 0, 0, runtime_browser::FETCH_INVALID_URL, reinterpret_cast<const char*>(out)};
+        }
+
+        char url_buf[2048];
+        std::memcpy(url_buf, url.data(), url.size());
+        url_buf[url.size()] = '\0';
+
+        const runtime_browser::FetchResult fetched = runtime_browser::get_bytes(url_buf, out, out_cap, timeout_ms);
+        if (!fetched.ok && status_) {
+            status_->fail(errors::kFetchFailed);
         }
         return fetched;
     }
@@ -391,7 +462,7 @@ class Input {
         const std::string_view inputs = detail::object_field(root_, "inputs");
         const std::string_view node = detail::object_field(inputs, node_id);
         if (node.empty()) {
-            status_.fail(9);
+            status_.fail(errors::kInputNodeMissing);
         }
         return Object(node, &status_);
     }
@@ -410,7 +481,7 @@ class Input {
 
         const std::string_view anywhere = detail::object_field(root_, artifact_id);
         if (anywhere.empty()) {
-            status_.fail(10);
+            status_.fail(errors::kInputArtifactMissing);
         }
         return Object(anywhere, &status_);
     }
@@ -428,7 +499,7 @@ class Input {
     Object arg() const {
         const std::string_view value = detail::first_arg(root_);
         if (value.empty()) {
-            status_.fail(11);
+            status_.fail(errors::kInputArgsMissing);
         }
         return Object(value, &status_);
     }
@@ -448,7 +519,7 @@ class Output {
     void number(long long value) {
         const int written = std::snprintf(data_, cap_, "%lld", value);
         if (written < 0 || written >= cap_) {
-            status_.fail(20);
+            status_.fail(errors::kOutputNumberTooLong);
             return;
         }
         len_ = written;
@@ -457,15 +528,72 @@ class Output {
     void null() {
         const int written = std::snprintf(data_, cap_, "null");
         if (written != 4) {
-            status_.fail(21);
+            status_.fail(errors::kOutputNullFailed);
             return;
         }
         len_ = written;
     }
 
+    // text writes value as a properly JSON-encoded string: wraps it in quotes
+    // and escapes any character that would break JSON. Use this whenever
+    // result_schema declares output type "string".
     void text(std::string_view value) {
+        if (cap_ < 2) {
+            status_.fail(errors::kOutputTextTooLong);
+            return;
+        }
+        int pos = 0;
+        data_[pos++] = '"';
+        for (const char raw : value) {
+            const unsigned char c = static_cast<unsigned char>(raw);
+            int needed;
+            if (raw == '"' || raw == '\\' || raw == '\n' || raw == '\r' || raw == '\t' || raw == '\b' || raw == '\f') {
+                needed = 2;
+            } else if (c < 0x20) {
+                needed = 6;
+            } else {
+                needed = 1;
+            }
+            // +1 reserves space for the closing quote that follows the loop.
+            if (pos + needed + 1 > cap_) {
+                status_.fail(errors::kOutputTextTooLong);
+                return;
+            }
+            switch (raw) {
+                case '"':  data_[pos++] = '\\'; data_[pos++] = '"';  break;
+                case '\\': data_[pos++] = '\\'; data_[pos++] = '\\'; break;
+                case '\n': data_[pos++] = '\\'; data_[pos++] = 'n';  break;
+                case '\r': data_[pos++] = '\\'; data_[pos++] = 'r';  break;
+                case '\t': data_[pos++] = '\\'; data_[pos++] = 't';  break;
+                case '\b': data_[pos++] = '\\'; data_[pos++] = 'b';  break;
+                case '\f': data_[pos++] = '\\'; data_[pos++] = 'f';  break;
+                default:
+                    if (c < 0x20) {
+                        static const char* hex = "0123456789abcdef";
+                        data_[pos++] = '\\';
+                        data_[pos++] = 'u';
+                        data_[pos++] = '0';
+                        data_[pos++] = '0';
+                        data_[pos++] = hex[(c >> 4) & 0xF];
+                        data_[pos++] = hex[c & 0xF];
+                    } else {
+                        data_[pos++] = raw;
+                    }
+            }
+        }
+        data_[pos++] = '"';
+        len_ = pos;
+        if (pos < cap_) {
+            data_[pos] = '\0';
+        }
+    }
+
+    // raw_json writes value verbatim. Use only when value is already a valid
+    // JSON fragment (a pre-quoted string, a number, an object literal, etc.).
+    // Prefer text(), number(), object(), or array() in normal node code.
+    void raw_json(std::string_view value) {
         if (value.size() >= static_cast<size_t>(cap_)) {
-            status_.fail(22);
+            status_.fail(errors::kOutputTextTooLong);
             return;
         }
         std::memcpy(data_, value.data(), value.size());
@@ -479,7 +607,7 @@ class Output {
     void array(const std::vector<T>& values) {
         int pos = 0;
         if (cap_ < 2) {
-            status_.fail(23);
+            status_.fail(errors::kOutputArrayBegin);
             return;
         }
         data_[pos++] = '[';
@@ -488,14 +616,14 @@ class Output {
             const int written =
                 std::snprintf(data_ + pos, cap_ - pos, first ? "%lld" : ",%lld", static_cast<long long>(value));
             if (written <= 0 || written >= cap_ - pos) {
-                status_.fail(24);
+                status_.fail(errors::kOutputArrayElement);
                 return;
             }
             pos += written;
             first = false;
         }
         if (pos + 2 > cap_) {
-            status_.fail(25);
+            status_.fail(errors::kOutputArrayEnd);
             return;
         }
         data_[pos++] = ']';
@@ -518,7 +646,7 @@ class Output {
         void done() {
             len_ = json_.end_object();
             if (!json_.ok()) {
-                status_.fail(26);
+                status_.fail(errors::kOutputObjectFailed);
             }
         }
 

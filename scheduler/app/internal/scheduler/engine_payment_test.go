@@ -100,7 +100,7 @@ func TestEngineProcessPaymentsRevertsProcessingStateWhenPersistFails(t *testing.
 			JobID:      "job-1",
 			WorkflowID: "wf",
 			WorkerID:   "w1",
-			Status:     paymentStatusPending,
+			Status:     PaymentStatusPending,
 			UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
 		},
 	})
@@ -124,7 +124,7 @@ func TestEngineProcessPaymentsRevertsProcessingStateWhenPersistFails(t *testing.
 	if len(events) != 1 {
 		t.Fatalf("expected 1 payment event, got %d", len(events))
 	}
-	if events[0].Status != paymentStatusPending {
+	if events[0].Status != PaymentStatusPending {
 		t.Fatalf("expected payment to revert to pending, got %#v", events[0])
 	}
 }
@@ -141,7 +141,7 @@ func TestEngineRestorePendingPaymentsMarksInterruptedProcessingAndAllowsRequeue(
 			JobID:      "job-1",
 			WorkflowID: "wf",
 			WorkerID:   "w1",
-			Status:     paymentStatusProcessing,
+			Status:     PaymentStatusProcessing,
 			UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
 		},
 		{
@@ -149,7 +149,7 @@ func TestEngineRestorePendingPaymentsMarksInterruptedProcessingAndAllowsRequeue(
 			JobID:      "job-2",
 			WorkflowID: "wf",
 			WorkerID:   "w2",
-			Status:     paymentStatusRetry,
+			Status:     PaymentStatusRetry,
 			UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
 		},
 		{
@@ -157,7 +157,7 @@ func TestEngineRestorePendingPaymentsMarksInterruptedProcessingAndAllowsRequeue(
 			JobID:      "job-3",
 			WorkflowID: "wf",
 			WorkerID:   "w3",
-			Status:     paymentStatusReview,
+			Status:     PaymentStatusReview,
 			UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
 		},
 	})
@@ -171,14 +171,14 @@ func TestEngineRestorePendingPaymentsMarksInterruptedProcessingAndAllowsRequeue(
 	for _, event := range events {
 		byID[event.ID] = event
 	}
-	if got := byID["evt-processing"]; got.Status != paymentStatusReview || got.LastError == "" {
+	if got := byID["evt-processing"]; got.Status != PaymentStatusReview || got.LastError == "" {
 		t.Fatalf("expected interrupted processing event to require review, got %#v", got)
 	}
-	if got := byID["evt-review"]; got.Status != paymentStatusReview {
+	if got := byID["evt-review"]; got.Status != PaymentStatusReview {
 		t.Fatalf("expected existing review event to stay requeueable, got %#v", got)
 	}
 
-	requeued := engine.RequeuePaymentsByStatus(paymentStatusReview, paymentStatusRetry, "manual retry")
+	requeued := engine.RequeuePaymentsByStatus(PaymentStatusReview, PaymentStatusRetry, "manual retry")
 	if requeued != 2 {
 		t.Fatalf("expected 2 events to be requeued, got %d", requeued)
 	}
@@ -188,10 +188,10 @@ func TestEngineRestorePendingPaymentsMarksInterruptedProcessingAndAllowsRequeue(
 	for _, event := range events {
 		byID[event.ID] = event
 	}
-	if got := byID["evt-processing"]; got.Status != paymentStatusRetry || got.LastError != "manual retry" {
+	if got := byID["evt-processing"]; got.Status != PaymentStatusRetry || got.LastError != "manual retry" {
 		t.Fatalf("expected reviewed event to move back to retry, got %#v", got)
 	}
-	if got := byID["evt-review"]; got.Status != paymentStatusRetry || got.LastError != "manual retry" {
+	if got := byID["evt-review"]; got.Status != PaymentStatusRetry || got.LastError != "manual retry" {
 		t.Fatalf("expected existing review event to move back to retry, got %#v", got)
 	}
 }

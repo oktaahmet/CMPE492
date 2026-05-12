@@ -16,7 +16,7 @@ func TestValidateResultPayloadEnforcesSchema(t *testing.T) {
 		"tags":    {Type: "array"},
 	}
 
-	if err := validateResultPayload(map[string]any{
+	if err := ValidateResultPayload(map[string]any{
 		"output":  float64(12),
 		"summary": map[string]any{"ok": true},
 		"tags":    []any{"a", "b"},
@@ -24,13 +24,13 @@ func TestValidateResultPayloadEnforcesSchema(t *testing.T) {
 		t.Fatalf("expected valid payload, got %v", err)
 	}
 
-	if err := validateResultPayload(map[string]any{
+	if err := ValidateResultPayload(map[string]any{
 		"summary": map[string]any{},
 	}, schema); err == nil {
 		t.Fatalf("expected missing required output to fail")
 	}
 
-	if err := validateResultPayload(map[string]any{
+	if err := ValidateResultPayload(map[string]any{
 		"output": "12",
 	}, schema); err == nil {
 		t.Fatalf("expected wrong output type to fail")

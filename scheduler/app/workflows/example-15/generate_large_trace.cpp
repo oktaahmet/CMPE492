@@ -18,8 +18,8 @@ WORKFLOW_NODE_WITH_CAPS(input, output, 8192, 262144) {
     if (target < 1024) {
         target = 1024;
     }
-    if (target > 262016) {
-        target = 262016;
+    if (target > 240000) {
+        target = 240000;
     }
 
     uint64_t rng = workflow::random_seed();

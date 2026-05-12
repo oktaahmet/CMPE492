@@ -39,7 +39,7 @@ func (e *Engine) SubmitResult(req ResultSubmission) (Decision, error) {
 		}
 		return Decision{}, errors.New("worker was not assigned for this job")
 	}
-	if err := validateResultPayload(req.ResultPayload, state.job.ResultSchema); err != nil {
+	if err := ValidateResultPayload(req.ResultPayload, state.job.ResultSchema); err != nil {
 		return Decision{}, err
 	}
 	submissionDigest, err := canonicalSubmissionDigest(req.ResultPayload)
@@ -235,9 +235,6 @@ func ValidateResultPayload(payload map[string]any, schema map[string]PayloadFiel
 	return nil
 }
 
-func validateResultPayload(payload map[string]any, schema map[string]PayloadFieldRule) error {
-	return ValidateResultPayload(payload, schema)
-}
 
 func canonicalSubmissionDigest(payload map[string]any) (string, error) {
 	if payload == nil {
