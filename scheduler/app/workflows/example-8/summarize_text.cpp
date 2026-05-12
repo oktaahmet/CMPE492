@@ -30,7 +30,7 @@ WORKFLOW_NODE(input, output) {
     const int n = std::snprintf(
         buf,
         static_cast<int>(sizeof(buf)),
-        "\"passes_%d bytes_%d items_%d\"",
+        "passes_%d bytes_%d items_%d",
         passes,
         static_cast<int>(upstream.size()),
         item_count);
@@ -38,5 +38,5 @@ WORKFLOW_NODE(input, output) {
         output.fail(30);
         return;
     }
-    output.text(buf);
+    output.text(std::string_view(buf, static_cast<size_t>(n)));
 }

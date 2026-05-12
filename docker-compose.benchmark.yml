@@ -1,0 +1,6 @@
+services:
+  scheduler:
+    environment:
+      WORKER_AUTH_DISABLED: "1"
+      WORKFLOW_BOOT_FILE: workflows/monte-carlo-pi/monte-carlo-pi.json
+      ASSIGNMENT_TTL_SECONDS: "15"

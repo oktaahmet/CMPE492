@@ -1,0 +1,26 @@
+{
+  "id": "wf-synthetic-load-500",
+  "nodes": [
+    {
+      "id": "synthetic-shard",
+      "program": "synthetic_noop.cpp",
+      "execution_target": "browser_worker",
+      "shard_count": 500,
+      "args": [
+        {
+          "simulated_ms": 5000,
+          "payload_bytes": 8192
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    }
+  ]
+}

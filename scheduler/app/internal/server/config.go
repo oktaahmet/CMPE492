@@ -202,6 +202,27 @@ func loadWorkerAuthChallengeTTL() time.Duration {
 	return ttl
 }
 
+// loadAssignmentTTL controls how long a worker can hold a job reservation before
+// the scheduler reclaims it and makes it available to another worker.
+func loadAssignmentTTL() time.Duration {
+	const defaultTTL = 30 * time.Second
+
+	raw := strings.TrimSpace(os.Getenv("ASSIGNMENT_TTL_SECONDS"))
+	if raw == "" {
+		return defaultTTL
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Printf("invalid ASSIGNMENT_TTL_SECONDS=%q, using %s", raw, defaultTTL)
+		return defaultTTL
+	}
+
+	ttl := time.Duration(n) * time.Second
+	log.Printf("assignment ttl: %s", ttl)
+	return ttl
+}
+
 // loadWorkerAuthDisabled enables local/demo mode where worker wallet/JWT checks
 // are skipped. Keep this false for real wallet-authenticated runs.
 func loadWorkerAuthDisabled() bool {

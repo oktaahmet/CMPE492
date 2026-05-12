@@ -27,6 +27,7 @@ type WorkflowNode struct {
 	WasmURL           string                      `json:"wasm_url"`
 	ExecutionTarget   ExecutionTarget             `json:"execution_target,omitempty"`
 	Args              []any                       `json:"args,omitempty"`
+	ShardCount        int                         `json:"shard_count,omitempty"`
 	UsesArtifacts     []string                    `json:"uses_artifacts,omitempty"`
 	OutputArtifacts   []WorkflowArtifact          `json:"output_artifacts,omitempty"`
 	ResultSchema      map[string]PayloadFieldRule `json:"result_schema,omitempty"`
@@ -35,6 +36,8 @@ type WorkflowNode struct {
 	AcceptancePolicy  AcceptancePolicy            `json:"acceptance_policy,omitempty"`
 	Traits            []string                    `json:"traits,omitempty"`
 }
+
+const maxWorkflowShardCount = 10000
 
 // WorkflowLoadResult reports what the manager accepted and which initial nodes
 // became runnable after validation/recovery.
@@ -430,6 +433,11 @@ func normalizeAndValidateWorkflow(spec WorkflowSpec, mode TopologyMode) (Workflo
 	if len(spec.Nodes) == 0 {
 		return WorkflowSpec{}, nil, nil, errors.New("workflow nodes are required")
 	}
+	var err error
+	spec, err = expandShardedNodes(spec)
+	if err != nil {
+		return WorkflowSpec{}, nil, nil, err
+	}
 	artifacts, artifactIDs, err := normalizeArtifacts(spec.Artifacts, "data")
 	if err != nil {
 		return WorkflowSpec{}, nil, nil, err
@@ -616,6 +624,96 @@ func isSafeArtifactID(value string) bool {
 		return false
 	}
 	return true
+}
+
+func expandShardedNodes(spec WorkflowSpec) (WorkflowSpec, error) {
+	authoredIDs := make(map[string]bool, len(spec.Nodes))
+	for _, node := range spec.Nodes {
+		id := strings.TrimSpace(node.ID)
+		if id == "" {
+			continue
+		}
+		if authoredIDs[id] {
+			return WorkflowSpec{}, fmt.Errorf("duplicate node id: %s", id)
+		}
+		authoredIDs[id] = true
+	}
+
+	childrenByTemplateID := make(map[string][]string)
+	expanded := make([]WorkflowNode, 0, len(spec.Nodes))
+	for _, raw := range spec.Nodes {
+		nodeID := strings.TrimSpace(raw.ID)
+		if raw.ShardCount < 0 {
+			return WorkflowSpec{}, fmt.Errorf("node %s shard_count must be >= 0", nodeID)
+		}
+		if raw.ShardCount == 0 {
+			expanded = append(expanded, raw)
+			continue
+		}
+		if raw.ShardCount > maxWorkflowShardCount {
+			return WorkflowSpec{}, fmt.Errorf("node %s shard_count must be <= %d", nodeID, maxWorkflowShardCount)
+		}
+		if nodeID == "" {
+			return WorkflowSpec{}, errors.New("node id is required")
+		}
+
+		children := make([]string, 0, raw.ShardCount)
+		for shardIndex := 0; shardIndex < raw.ShardCount; shardIndex++ {
+			child := raw
+			child.ID = fmt.Sprintf("%s-%d", nodeID, shardIndex)
+			child.ShardCount = 0
+
+			args, err := injectShardIndex(child.Args, shardIndex)
+			if err != nil {
+				return WorkflowSpec{}, fmt.Errorf("node %s args invalid: %w", nodeID, err)
+			}
+			child.Args = args
+
+			expanded = append(expanded, child)
+			children = append(children, child.ID)
+		}
+		childrenByTemplateID[nodeID] = children
+	}
+
+	for i := range expanded {
+		if len(expanded[i].DependsOn) == 0 {
+			continue
+		}
+		deps := make([]string, 0, len(expanded[i].DependsOn))
+		for _, dep := range expanded[i].DependsOn {
+			trimmed := strings.TrimSpace(dep)
+			if trimmed == "" {
+				continue
+			}
+			if children, ok := childrenByTemplateID[trimmed]; ok {
+				deps = append(deps, children...)
+				continue
+			}
+			deps = append(deps, trimmed)
+		}
+		expanded[i].DependsOn = deps
+	}
+
+	spec.Nodes = expanded
+	return spec, nil
+}
+
+func injectShardIndex(args []any, shardIndex int) ([]any, error) {
+	if len(args) == 0 {
+		return []any{map[string]any{"shard_index": shardIndex}}, nil
+	}
+
+	out := make([]any, len(args))
+	for i, arg := range args {
+		out[i] = cloneValue(arg)
+	}
+
+	first, ok := out[0].(map[string]any)
+	if !ok {
+		return nil, errors.New("first args item must be an object when shard_count is set")
+	}
+	first["shard_index"] = shardIndex
+	return out, nil
 }
 
 // normalizeStringList trims, deduplicates, and sorts user-authored string lists

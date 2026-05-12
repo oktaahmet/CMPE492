@@ -1,166 +1,55 @@
-#include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <fstream>
 #include <string>
 
-#include "../common/runtime_json.hpp"
-#include "../common/runtime_node.hpp"
+#include "../common/workflow.hpp"
 
-namespace {
-int sum_named_ints(const char* data, int len, const char* key) {
-    const int key_len = static_cast<int>(std::strlen(key));
-    int sum = 0;
-    for (int i = 0; i + key_len + 3 < len; ++i) {
-        if (data[i] != '"') {
-            continue;
-        }
-        bool match = true;
-        for (int j = 0; j < key_len; ++j) {
-            if (data[i + 1 + j] != key[j]) {
-                match = false;
-                break;
-            }
-        }
-        if (!match || data[i + key_len + 1] != '"') {
-            continue;
-        }
-        int k = i + key_len + 2;
-        while (k < len && data[k] != ':') {
-            ++k;
-        }
-        ++k;
-        while (k < len && (data[k] == ' ' || data[k] == '\n' || data[k] == '\r' || data[k] == '\t')) {
-            ++k;
-        }
-        int value = 0;
-        while (k < len && data[k] >= '0' && data[k] <= '9') {
-            value = value * 10 + static_cast<int>(data[k] - '0');
-            ++k;
-        }
-        sum += value;
-    }
-    return sum;
-}
-
-int count_named_numbers(const char* data, int len, const char* key) {
-    const int key_len = static_cast<int>(std::strlen(key));
-    int count = 0;
-    for (int i = 0; i + key_len + 3 < len; ++i) {
-        if (data[i] != '"') {
-            continue;
-        }
-        bool match = true;
-        for (int j = 0; j < key_len; ++j) {
-            if (data[i + 1 + j] != key[j]) {
-                match = false;
-                break;
-            }
-        }
-        if (!match || data[i + key_len + 1] != '"') {
-            continue;
-        }
-        int k = i + key_len + 2;
-        while (k < len && data[k] != ':') {
-            ++k;
-        }
-        ++k;
-        while (k < len && (data[k] == ' ' || data[k] == '\n' || data[k] == '\r' || data[k] == '\t')) {
-            ++k;
-        }
-        if (k < len && data[k] >= '0' && data[k] <= '9') {
-            ++count;
-        }
-    }
-    return count;
-}
-
-int next_named_string(const char* data, int len, const char* key, int start, const char** out) {
-    const int key_len = static_cast<int>(std::strlen(key));
-    for (int i = start; i + key_len + 3 < len; ++i) {
-        if (data[i] != '"') {
-            continue;
-        }
-        bool match = true;
-        for (int j = 0; j < key_len; ++j) {
-            if (data[i + 1 + j] != key[j]) {
-                match = false;
-                break;
-            }
-        }
-        if (!match || data[i + key_len + 1] != '"') {
-            continue;
-        }
-        int k = i + key_len + 2;
-        while (k < len && data[k] != ':') {
-            ++k;
-        }
-        ++k;
-        while (k < len && (data[k] == ' ' || data[k] == '\n' || data[k] == '\r' || data[k] == '\t')) {
-            ++k;
-        }
-        if (k >= len || data[k] != '"') {
-            continue;
-        }
-        ++k;
-        *out = data + k;
-        int n = 0;
-        while (k + n < len && data[k + n] != '"' && data[k + n] != '\\') {
-            ++n;
-        }
-        return n;
-    }
-    *out = nullptr;
-    return 0;
-}
-}  // namespace
-
-WORKFLOW_JSON_NODE(512 * 1024, 1024)
-
-int workflow_run_json(const char* input, int input_len, char* output, int output_cap, int& output_len) {
-    const char* path_ptr = nullptr;
-    const int path_len = runtime_json::extract_named_string(input, input_len, "path", &path_ptr);
-    if (path_len <= 0) {
-        return 2;
-    }
-
-    const std::string path(path_ptr, static_cast<size_t>(path_len));
-    std::ofstream report(path);
+WORKFLOW_NODE_WITH_CAPS(input, output, 512 * 1024, 1024) {
+    const std::string report_path(input.output_artifact("matches").string("path"));
+    std::ofstream report(report_path);
     if (!report) {
-        return 3;
+        output.fail(30);
+        return;
     }
 
     report << "index,input,hash\n";
+
+    int shard_count = 0;
+    int processed_total = 0;
+    int reported_matches = 0;
     int written_matches = 0;
-    int cursor = 0;
-    const char* matches = nullptr;
-    while (true) {
-        const int matches_len = next_named_string(input, input_len, "matches", cursor, &matches);
-        if (matches_len <= 0) {
+
+    // Iterate over hash-shard-0..N until a shard id stops appearing in inputs.
+    // The workflow JSON pins shard ids; finding a gap means we've seen them all.
+    for (int shard_idx = 0; shard_idx < 64; ++shard_idx) {
+        char node_id[64];
+        std::snprintf(node_id, sizeof(node_id), "hash-shard-%d", shard_idx);
+
+        const auto shard = input.optional_node(node_id);
+        if (!shard.ok()) {
             break;
         }
-        cursor = static_cast<int>((matches - input) + matches_len);
-        for (int i = 0; i < matches_len; ++i) {
-            if (matches[i] == ';') {
-                report << "\n";
+
+        ++shard_count;
+        processed_total += shard.int_("processed", 0);
+        reported_matches += shard.int_("match_count", 0);
+
+        const auto matches = shard.string("matches");
+        for (const char c : matches) {
+            if (c == ';') {
+                report << '\n';
                 ++written_matches;
             } else {
-                report << matches[i];
+                report << c;
             }
         }
     }
 
-    const int processed_total = sum_named_ints(input, input_len, "processed");
-    const int shard_count = count_named_numbers(input, input_len, "range_start");
-    const int reported_matches = sum_named_ints(input, input_len, "match_count");
-
-    runtime_json::JsonWriter json(output, output_cap);
-    json.begin_object();
+    auto json = output.object();
     json.field("shard_count", shard_count);
     json.field("processed_total", processed_total);
     json.field("reported_matches", reported_matches);
     json.field("written_matches", written_matches);
     json.field("report", "matches.txt");
-    output_len = json.end_object();
-    return json.ok() ? 0 : 4;
+    json.done();
 }

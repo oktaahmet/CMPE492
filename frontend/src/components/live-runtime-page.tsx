@@ -142,6 +142,8 @@ function computeGraph(runtime: RuntimeSnapshot | null): {
   height: number;
   nodes: PositionedNode[];
   edges: RuntimeEdge[];
+  dense: boolean;
+  edgesHidden: boolean;
 } | null {
   if (!runtime?.workflow?.nodes || runtime.workflow.nodes.length === 0) {
     return null;
@@ -170,13 +172,26 @@ function computeGraph(runtime: RuntimeSnapshot | null): {
     });
   }
 
-  const columnCount = Math.max(...Array.from(levels.keys())) + 1;
-  const rowCount = Math.max(...Array.from(levels.values()).map((list) => list.length));
-  const columnWidth = 248;
-  const rowHeight = 168;
-  const nodeWidth = 188;
-  const nodeHeight = 116;
-  const width = Math.max(760, columnCount * columnWidth + 96);
+  const dense = nodes.length > 80;
+  const columnWidth = dense ? 164 : 248;
+  const rowHeight = dense ? 88 : 168;
+  const nodeWidth = dense ? 148 : 188;
+  const nodeHeight = dense ? 72 : 116;
+  const levelLayout = new Map<number, { x: number; rows: number; columns: number }>();
+  const orderedDepths = Array.from(levels.keys()).sort((left, right) => left - right);
+  let cursorX = 48;
+  let rowCount = 1;
+
+  for (const depth of orderedDepths) {
+    const list = levels.get(depth) ?? [];
+    const rows = dense ? Math.max(1, Math.ceil(Math.sqrt(list.length))) : Math.max(1, list.length);
+    const columns = Math.max(1, Math.ceil(list.length / rows));
+    levelLayout.set(depth, { x: cursorX, rows, columns });
+    rowCount = Math.max(rowCount, rows);
+    cursorX += columns * columnWidth + (dense ? 72 : 96);
+  }
+
+  const width = Math.max(760, cursorX + 48);
   const height = Math.max(320, rowCount * rowHeight + 96);
 
   const positionedNodes: PositionedNode[] = [];
@@ -185,31 +200,38 @@ function computeGraph(runtime: RuntimeSnapshot | null): {
     list.forEach((node, index) => {
       const job = jobsByNodeID.get(node.id);
       const state = buildNodeState(node, job);
-      const x = 48 + depth * columnWidth;
-      const y = 52 + index * rowHeight;
+      const layout = levelLayout.get(depth) ?? { x: 48, rows: Math.max(1, list.length), columns: 1 };
+      const col = dense ? Math.floor(index / layout.rows) : 0;
+      const row = dense ? index % layout.rows : index;
+      const x = layout.x + col * columnWidth;
+      const y = 52 + row * rowHeight;
       positionedNodes.push({ node, job, state, x, y });
       positions.set(node.id, { x, y, state });
     });
   }
 
   const edges: RuntimeEdge[] = [];
-  for (const node of nodes) {
-    const target = positions.get(node.id);
-    if (!target) continue;
-    for (const depID of node.depends_on ?? []) {
-      const source = positions.get(depID);
-      if (!source) continue;
-      const startX = source.x + nodeWidth;
-      const startY = source.y + nodeHeight / 2;
-      const endX = target.x;
-      const endY = target.y + nodeHeight / 2;
-      const midX = (startX + endX) / 2;
-      const active = source.state === "finalized" || target.state === "assigned" || target.state === "submitted";
-      edges.push({
-        id: `${depID}->${node.id}`,
-        path: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`,
-        active,
-      });
+  const edgeCount = nodes.reduce((sum, node) => sum + (node.depends_on?.length ?? 0), 0);
+  const edgesHidden = edgeCount > 1200;
+  if (!edgesHidden) {
+    for (const node of nodes) {
+      const target = positions.get(node.id);
+      if (!target) continue;
+      for (const depID of node.depends_on ?? []) {
+        const source = positions.get(depID);
+        if (!source) continue;
+        const startX = source.x + nodeWidth;
+        const startY = source.y + nodeHeight / 2;
+        const endX = target.x;
+        const endY = target.y + nodeHeight / 2;
+        const midX = (startX + endX) / 2;
+        const active = source.state === "finalized" || target.state === "assigned" || target.state === "submitted";
+        edges.push({
+          id: `${depID}->${node.id}`,
+          path: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`,
+          active,
+        });
+      }
     }
   }
 
@@ -218,6 +240,8 @@ function computeGraph(runtime: RuntimeSnapshot | null): {
     height,
     nodes: positionedNodes,
     edges,
+    dense,
+    edgesHidden,
   };
 }
 
@@ -343,23 +367,23 @@ export function LiveRuntimePage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-            <div className="rounded-2xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50 p-4">
+            <div className="rounded-2xl border border-slate-200/80 bg-linear-to-b from-white to-slate-50 p-4">
               <div className="text-2xl font-semibold">{stats.queued_jobs}</div>
               <div className="text-xs text-muted-foreground">Queued Jobs</div>
             </div>
-            <div className="rounded-2xl border border-slate-200/80 bg-gradient-to-b from-white to-emerald-50 p-4">
+            <div className="rounded-2xl border border-slate-200/80 bg-linear-to-b from-white to-emerald-50 p-4">
               <div className="text-2xl font-semibold">{stats.finalized_jobs}</div>
               <div className="text-xs text-muted-foreground">Finalized Jobs</div>
             </div>
-            <div className="rounded-2xl border border-slate-200/80 bg-gradient-to-b from-white to-sky-50 p-4">
+            <div className="rounded-2xl border border-slate-200/80 bg-linear-to-b from-white to-sky-50 p-4">
               <div className="text-2xl font-semibold">{stats.workers_online}</div>
               <div className="text-xs text-muted-foreground">Workers Online</div>
             </div>
-            <div className="rounded-2xl border border-slate-200/80 bg-gradient-to-b from-white to-amber-50 p-4">
+            <div className="rounded-2xl border border-slate-200/80 bg-linear-to-b from-white to-amber-50 p-4">
               <div className="text-2xl font-semibold">{stats.pending_payments}</div>
               <div className="text-xs text-muted-foreground">Pending Payments</div>
             </div>
-            <div className="rounded-2xl border border-slate-200/80 bg-gradient-to-b from-white to-violet-50 p-4">
+            <div className="rounded-2xl border border-slate-200/80 bg-linear-to-b from-white to-violet-50 p-4">
               <div className="text-2xl font-semibold">{stats.total_jobs}</div>
               <div className="text-xs text-muted-foreground">Known Jobs</div>
             </div>
@@ -394,7 +418,19 @@ export function LiveRuntimePage() {
       <div className="grid grid-cols-1 gap-4">
         <Card className="overflow-hidden border-border/70 bg-card/90 backdrop-blur">
           <CardHeader>
-            <CardTitle className="text-base">Workflow Graph</CardTitle>
+            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+              Workflow Graph
+              {graph?.dense ? (
+                <Badge variant="outline" className="text-[11px]">
+                  compact
+                </Badge>
+              ) : null}
+              {graph?.edgesHidden ? (
+                <Badge variant="outline" className="text-[11px]">
+                  edges hidden
+                </Badge>
+              ) : null}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             {!graph ? (
@@ -402,7 +438,7 @@ export function LiveRuntimePage() {
                 No active workflow snapshot available.
               </div>
             ) : (
-              <div className="overflow-auto rounded-3xl border border-slate-200/80 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.14),transparent_32%),linear-gradient(180deg,#fcfdff,#f2f7ff)] p-2 md:p-3">
+              <div className="h-[72vh] max-h-[760px] min-h-[360px] overflow-auto overscroll-contain rounded-2xl border border-slate-200/80 bg-[linear-gradient(180deg,#fcfdff,#f4f8ff)] p-2 md:p-3">
                 <div className="relative" style={{ width: `${graph.width}px`, height: `${graph.height}px` }}>
                   <svg className="absolute inset-0 h-full w-full" viewBox={`0 0 ${graph.width} ${graph.height}`}>
                     {graph.edges.map((edge) => (
@@ -430,45 +466,59 @@ export function LiveRuntimePage() {
                       <button
                         type="button"
                         key={node.id}
-                        className={`absolute w-[188px] overflow-hidden rounded-[1.25rem] border px-4 py-3 text-left shadow-[0_18px_44px_rgba(15,23,42,0.08)] transition-transform duration-200 hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-slate-400/60 ${nodeStateClass(state)} ${nodeTargetClass(node, job)}`}
+                        className={`absolute overflow-hidden border text-left shadow-[0_12px_32px_rgba(15,23,42,0.07)] transition-transform duration-200 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-slate-400/60 ${
+                          graph.dense ? "h-[72px] w-[148px] rounded-xl px-3 py-2" : "w-[188px] rounded-[1.25rem] px-4 py-3"
+                        } ${nodeStateClass(state)} ${nodeTargetClass(node, job)}`}
                         style={{ left: `${x}px`, top: `${y}px` }}
                         onClick={() => setSelectedNodeID(node.id)}
                       >
                         {serverNode ? (
-                          <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-orange-500 via-amber-400 to-orange-300" />
+                          <div className="absolute inset-x-0 top-0 h-1.5 bg-linear-to-r from-orange-500 via-amber-400 to-orange-300" />
                         ) : (
-                          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-sky-300 via-cyan-200 to-sky-100 opacity-70" />
+                          <div className="absolute inset-x-0 top-0 h-1 bg-linear-to-r from-sky-300 via-cyan-200 to-sky-100 opacity-70" />
                         )}
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <div className="text-sm font-semibold">{node.id}</div>
-                            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                            <div className={`${graph.dense ? "max-w-[92px] truncate text-xs" : "text-sm"} font-semibold`}>
+                              {node.id}
+                            </div>
+                            <div className={`${graph.dense ? "text-[9px] tracking-[0.14em]" : "text-[11px] tracking-[0.18em]"} uppercase text-muted-foreground`}>
                               {state}
                             </div>
                           </div>
-                          <Badge variant="outline" className="text-[10px]">
+                          <Badge variant="outline" className={graph.dense ? "px-1.5 py-0 text-[9px]" : "text-[10px]"}>
                             P{node.priority ?? 0}
                           </Badge>
                         </div>
 
-                        <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                        <div className={`${graph.dense ? "mt-2 gap-1 text-[10px]" : "mt-3 gap-2 text-[11px]"} flex flex-wrap text-muted-foreground`}>
                           {!serverNode ? (
-                            <span className="rounded-full bg-white/80 px-2 py-1">reward {node.reward_usdc}</span>
+                            graph.dense ? null : (
+                              <span className="rounded-full bg-white/80 px-2 py-1">reward {node.reward_usdc}</span>
+                            )
                           ) : null}
                           <span className={`rounded-full px-2 py-1 font-medium ${targetChipClass(target)}`}>
                             {formatTarget(target)}
                           </span>
                           {!serverNode ? (
                             <>
-                              <span className="rounded-full bg-white/80 px-2 py-1">
-                                rep {job?.required_replicas ?? node.replication_factor ?? 1}
-                              </span>
-                              <span className="rounded-full bg-white/80 px-2 py-1">
-                                {formatPolicy(job?.acceptance_policy ?? node.acceptance_policy)}
-                              </span>
+                              {graph.dense ? (
+                                <span className="rounded-full bg-white/80 px-2 py-1">
+                                  {job?.accepted_workers ?? 0}/{job?.required_replicas ?? node.replication_factor ?? 1}
+                                </span>
+                              ) : (
+                                <>
+                                  <span className="rounded-full bg-white/80 px-2 py-1">
+                                    rep {job?.required_replicas ?? node.replication_factor ?? 1}
+                                  </span>
+                                  <span className="rounded-full bg-white/80 px-2 py-1">
+                                    {formatPolicy(job?.acceptance_policy ?? node.acceptance_policy)}
+                                  </span>
+                                </>
+                              )}
                             </>
                           ) : null}
-                          {!serverNode ? (
+                          {!serverNode && !graph.dense ? (
                             <>
                               <span className="rounded-full bg-white/80 px-2 py-1">
                                 assigned {job?.assigned_workers?.length ?? 0}
@@ -483,12 +533,14 @@ export function LiveRuntimePage() {
                           ) : null}
                         </div>
 
-                        <div className="mt-3 flex items-center justify-between text-[11px] text-slate-600">
-                          <span>{traitCount > 0 ? `${traitCount} tags` : ""}</span>
-                          <span>
-                            {serverNode ? "tap for output" : hasWorkerChips ? "tap for workers" : "tap for details"}
-                          </span>
-                        </div>
+                        {!graph.dense ? (
+                          <div className="mt-3 flex items-center justify-between text-[11px] text-slate-600">
+                            <span>{traitCount > 0 ? `${traitCount} tags` : ""}</span>
+                            <span>
+                              {serverNode ? "tap for output" : hasWorkerChips ? "tap for workers" : "tap for details"}
+                            </span>
+                          </div>
+                        ) : null}
                       </button>
                     );
                   })}
@@ -631,7 +683,7 @@ export function LiveRuntimePage() {
                   ) : selectedOutputError ? (
                     <div className="text-sm text-red-200">{selectedOutputError}</div>
                   ) : selectedOutput ? (
-                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
+                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap-break-word font-mono text-xs leading-relaxed">
                       {formatJSONPreview(selectedOutput)}
                     </pre>
                   ) : (

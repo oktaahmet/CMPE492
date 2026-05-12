@@ -1,5 +1,4 @@
-#include "../common/runtime_json.hpp"
-#include "../common/runtime_node.hpp"
+#include "../common/workflow.hpp"
 
 namespace {
 int clamp_int(long long value, int min_value, int max_value) {
@@ -9,11 +8,9 @@ int clamp_int(long long value, int min_value, int max_value) {
 }
 }  // namespace
 
-WORKFLOW_JSON_NODE(4096, 1024)
-
-int workflow_run_json(const char* input, int input_len, char* output, int output_cap, int& output_len) {
-    const int seed = clamp_int(runtime_json::extract_named_int(input, input_len, "seed", 42), 1, 1000000);
-    const int samples = clamp_int(runtime_json::extract_named_int(input, input_len, "samples", 18), 4, 64);
+WORKFLOW_NODE(input, output) {
+    const int seed = clamp_int(input.number("seed", 42), 1, 1000000);
+    const int samples = clamp_int(input.number("samples", 18), 4, 64);
 
     int min_value = 1000000;
     int max_value = -1000000;
@@ -28,13 +25,11 @@ int workflow_run_json(const char* input, int input_len, char* output, int output
         checksum = (checksum + value * (i + 1)) % 100000;
     }
 
-    runtime_json::JsonWriter json(output, output_cap);
-    json.begin_object();
+    auto json = output.object();
     json.field("sample_count", samples);
     json.field("min_value", min_value);
     json.field("max_value", max_value);
     json.field("avg_value", total / samples);
     json.field("checksum", checksum);
-    output_len = json.end_object();
-    return json.ok() ? 0 : 2;
+    json.done();
 }
