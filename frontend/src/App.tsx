@@ -6,6 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   clearWorkerAuthSession,
   fetchStats,
   getWorkerAuthSession,
@@ -34,13 +43,26 @@ type EIP1193ProviderWithEvents = EIP1193Provider & {
   removeListener?: (eventName: string, listener: (...args: unknown[]) => void) => void;
 };
 
+type EIP6963ProviderInfo = {
+  uuid?: string;
+  name?: string;
+  rdns?: string;
+  icon?: string;
+};
+
 type EIP6963ProviderDetail = {
-  info?: {
-    name?: string;
-    rdns?: string;
-  };
+  info?: EIP6963ProviderInfo;
   provider?: EIP1193Provider;
 };
+
+type DiscoveredWallet = {
+  info: EIP6963ProviderInfo;
+  provider: EIP1193Provider;
+};
+
+function walletKey(info: EIP6963ProviderInfo): string {
+  return info.rdns ?? info.uuid ?? info.name ?? "";
+}
 
 declare global {
   interface Window {
@@ -127,6 +149,9 @@ export default function App() {
   const [walletStatus, setWalletStatus] = useState(
     initialAuthSession ? `wallet: verified ${initialAuthSession.worker_id}` : "wallet: disconnected",
   );
+  const [discoveredWallets, setDiscoveredWallets] = useState<DiscoveredWallet[]>([]);
+  const discoveredWalletsRef = useRef<DiscoveredWallet[]>([]);
+  const [walletPickerOpen, setWalletPickerOpen] = useState(false);
 
   const wasmWorkerRef = useRef<Worker | null>(null);
   const workerIdRef = useRef(initialAuthSession?.worker_id ?? "");
@@ -191,8 +216,7 @@ export default function App() {
     const ethereum = window.ethereum;
     if (ethereum) {
       if (Array.isArray(ethereum.providers) && ethereum.providers.length > 0) {
-        const coinbase = ethereum.providers.find((provider) => provider?.isCoinbaseWallet);
-        return coinbase ?? ethereum.providers[0];
+        return ethereum.providers[0];
       }
       return ethereum;
     }
@@ -270,23 +294,9 @@ export default function App() {
     }
   }, [ensureWasmWorker, handleWorkerAuthFailure, log, resetWasmWorker]);
 
-  const connectWallet = async () => {
-    log("Connect button clicked");
-
-    let provider = detectProvider();
-    if (!provider) {
-      await new Promise((resolve) => window.setTimeout(resolve, 400));
-      provider = detectProvider();
-    }
-    if (!provider) {
-      log("No wallet extension found", {
-        ethereum: Boolean(window.ethereum),
-        coinbase_wallet_extension: Boolean(window.coinbaseWalletExtension),
-        eip6963_discovered: Boolean(discoveredProviderRef.current),
-      });
-      return;
-    }
-
+  const connectWithProvider = async (provider: EIP1193Provider, walletName: string) => {
+    setWalletPickerOpen(false);
+    log("Wallet selected", { name: walletName });
     try {
       const accounts = await provider.request({ method: "eth_requestAccounts" });
       if (!Array.isArray(accounts) || accounts.length === 0 || typeof accounts[0] !== "string") {
@@ -308,6 +318,35 @@ export default function App() {
       clearAuthState(currentWorkerID ? `wallet: verification failed ${currentWorkerID}` : "wallet: disconnected");
       log("Wallet connect failed", { error: String(error) });
     }
+  };
+
+  const connectWallet = async () => {
+    log("Connect button clicked");
+
+    // Re-request EIP-6963 announcements; late-loading extensions can still respond.
+    window.dispatchEvent(new Event("eip6963:requestProvider"));
+    await new Promise((resolve) => window.setTimeout(resolve, 200));
+
+    const wallets = discoveredWalletsRef.current;
+    if (wallets.length === 1) {
+      await connectWithProvider(wallets[0].provider, wallets[0].info.name ?? "wallet");
+      return;
+    }
+    if (wallets.length >= 2) {
+      setWalletPickerOpen(true);
+      return;
+    }
+
+    const fallback = detectProvider();
+    if (!fallback) {
+      log("No wallet extension found", {
+        ethereum: Boolean(window.ethereum),
+        coinbase_wallet_extension: Boolean(window.coinbaseWalletExtension),
+        eip6963_discovered: Boolean(discoveredProviderRef.current),
+      });
+      return;
+    }
+    await connectWithProvider(fallback, "browser wallet");
   };
 
   const startWorking = useCallback(() => {
@@ -370,8 +409,13 @@ export default function App() {
       if (!discoveredProviderRef.current) {
         discoveredProviderRef.current = provider;
       }
-      if (String(info.rdns ?? "").includes("coinbase")) {
-        discoveredProviderRef.current = provider;
+
+      const key = walletKey(info);
+      const alreadyKnown = discoveredWalletsRef.current.some((w) => walletKey(w.info) === key);
+      if (!alreadyKnown) {
+        const entry: DiscoveredWallet = { info, provider };
+        discoveredWalletsRef.current = [...discoveredWalletsRef.current, entry];
+        setDiscoveredWallets(discoveredWalletsRef.current);
       }
 
       log("EIP-6963 provider announced", {
@@ -568,6 +612,42 @@ export default function App() {
           <LiveRuntimePage />
         )}
       </div>
+
+      <AlertDialog open={walletPickerOpen} onOpenChange={setWalletPickerOpen}>
+        <AlertDialogContent size="default">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Select a wallet</AlertDialogTitle>
+            <AlertDialogDescription>
+              Multiple wallet extensions detected. Choose which one to connect with.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex flex-col gap-2">
+            {discoveredWallets.map((wallet, index) => {
+              const key = walletKey(wallet.info) || String(index);
+              const label = wallet.info.name ?? wallet.info.rdns ?? "Unknown wallet";
+              return (
+                <Button
+                  key={key}
+                  type="button"
+                  variant="outline"
+                  className="h-12 justify-start gap-3"
+                  onClick={() => void connectWithProvider(wallet.provider, label)}
+                >
+                  {wallet.info.icon ? (
+                    <img src={wallet.info.icon} alt="" className="size-6 rounded" />
+                  ) : (
+                    <Wallet className="size-5" />
+                  )}
+                  <span className="truncate">{label}</span>
+                </Button>
+              );
+            })}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   );
 }
