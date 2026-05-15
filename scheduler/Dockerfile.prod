@@ -17,7 +17,6 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/x402-scheduler /usr/local/bin/x402-scheduler
-COPY app/admin ./admin
 COPY app/docs ./docs
 COPY app/static ./static
 COPY app/workflows ./workflows

@@ -40,15 +40,7 @@ func registerRoutes(deps routeDeps) {
 	http.HandleFunc("/readyz", readinessHandler(deps.Store))
 	registerAdminRoutes(deps)
 	http.Handle("/api/docs/", httpSwagger.WrapHandler)
-	registerAdminAssets()
 	http.Handle("/", http.FileServer(http.Dir("./static")))
-}
-
-func registerAdminAssets() {
-	http.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
-	})
-	http.Handle("/admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir("./admin"))))
 }
 
 func registerAdminRoutes(deps routeDeps) {
