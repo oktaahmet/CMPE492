@@ -4,10 +4,8 @@ services:
   db:
     image: postgres:15-alpine
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-x402_scheduler_db}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    env_file:
+      - ${PROD_ENV_FILE:-.env.production}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
