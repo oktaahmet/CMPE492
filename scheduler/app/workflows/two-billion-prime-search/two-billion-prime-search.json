@@ -1,0 +1,26 @@
+{
+  "id": "wf-two-billion-prime-search",
+  "nodes": [
+    {
+      "id": "prime-shard",
+      "program": "prime_shard.cpp",
+      "execution_target": "browser_worker",
+      "shard_count": 200,
+      "args": [
+        {
+          "range_size": 10000000,
+          "limit": 2000000000
+        }
+      ],
+      "replication_factor": 3,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.03"
+    }
+  ]
+}

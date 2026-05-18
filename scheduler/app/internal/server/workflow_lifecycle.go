@@ -24,7 +24,7 @@ func bootstrapWorkflow(
 	// to the bundled example so a fresh database still starts with runnable work.
 	bootPath := strings.TrimSpace(os.Getenv("WORKFLOW_BOOT_FILE"))
 	if bootPath == "" {
-		bootPath = filepath.Join("workflows", "prime-example", "prime-example.json")
+		bootPath = filepath.Join("workflows", "prime-range-analysis-dag", "prime-range-analysis-dag.json")
 	}
 	topologyMode, err := store.GetTopologyMode(ctx)
 	if err != nil {

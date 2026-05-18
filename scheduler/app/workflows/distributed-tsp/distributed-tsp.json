@@ -1,0 +1,181 @@
+{
+  "id": "wf-distributed-tsp",
+  "artifacts": [
+    {
+      "id": "cities",
+      "file": "cities.csv"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "fetch-tuning-context",
+      "priority": 100,
+      "program": "fetch_tuning_context.cpp",
+      "execution_target": "browser_worker",
+      "args": [{ "timeout_ms": 3000 }],
+      "replication_factor": 2,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": { "type": "object", "required": true }
+      },
+      "reward_usdc": "0.04"
+    },
+    {
+      "id": "read-cities",
+      "priority": 100,
+      "program": "read_cities.cpp",
+      "execution_target": "server",
+      "uses_artifacts": ["cities"],
+      "args": [{}],
+      "result_schema": {
+        "output": { "type": "object", "required": true }
+      },
+      "reward_usdc": "0.00"
+    },
+    {
+      "id": "plan-search",
+      "depends_on": ["fetch-tuning-context", "read-cities"],
+      "priority": 90,
+      "program": "plan_search.cpp",
+      "execution_target": "server",
+      "args": [{ "restarts_per_shard": 50000 }],
+      "result_schema": {
+        "output": { "type": "object", "required": true }
+      },
+      "reward_usdc": "0.00"
+    },
+    {
+      "id": "search-shard-0",
+      "depends_on": ["plan-search"],
+      "priority": 80,
+      "program": "search_shard.cpp",
+      "execution_target": "browser_worker",
+      "uses_artifacts": ["cities"],
+      "args": [{ "seed_offset": 0, "timeout_ms": 5000 }],
+      "replication_factor": 1,
+      "result_schema": { "output": { "type": "object", "required": true } },
+      "reward_usdc": "0.02"
+    },
+    {
+      "id": "search-shard-1",
+      "depends_on": ["plan-search"],
+      "priority": 80,
+      "program": "search_shard.cpp",
+      "execution_target": "browser_worker",
+      "uses_artifacts": ["cities"],
+      "args": [{ "seed_offset": 1, "timeout_ms": 5000 }],
+      "replication_factor": 1,
+      "result_schema": { "output": { "type": "object", "required": true } },
+      "reward_usdc": "0.02"
+    },
+    {
+      "id": "search-shard-2",
+      "depends_on": ["plan-search"],
+      "priority": 80,
+      "program": "search_shard.cpp",
+      "execution_target": "browser_worker",
+      "uses_artifacts": ["cities"],
+      "args": [{ "seed_offset": 2, "timeout_ms": 5000 }],
+      "replication_factor": 1,
+      "result_schema": { "output": { "type": "object", "required": true } },
+      "reward_usdc": "0.02"
+    },
+    {
+      "id": "search-shard-3",
+      "depends_on": ["plan-search"],
+      "priority": 80,
+      "program": "search_shard.cpp",
+      "execution_target": "browser_worker",
+      "uses_artifacts": ["cities"],
+      "args": [{ "seed_offset": 3, "timeout_ms": 5000 }],
+      "replication_factor": 1,
+      "result_schema": { "output": { "type": "object", "required": true } },
+      "reward_usdc": "0.02"
+    },
+    {
+      "id": "search-shard-4",
+      "depends_on": ["plan-search"],
+      "priority": 80,
+      "program": "search_shard.cpp",
+      "execution_target": "browser_worker",
+      "uses_artifacts": ["cities"],
+      "args": [{ "seed_offset": 4, "timeout_ms": 5000 }],
+      "replication_factor": 1,
+      "result_schema": { "output": { "type": "object", "required": true } },
+      "reward_usdc": "0.02"
+    },
+    {
+      "id": "search-shard-5",
+      "depends_on": ["plan-search"],
+      "priority": 80,
+      "program": "search_shard.cpp",
+      "execution_target": "browser_worker",
+      "uses_artifacts": ["cities"],
+      "args": [{ "seed_offset": 5, "timeout_ms": 5000 }],
+      "replication_factor": 1,
+      "result_schema": { "output": { "type": "object", "required": true } },
+      "reward_usdc": "0.02"
+    },
+    {
+      "id": "search-shard-6",
+      "depends_on": ["plan-search"],
+      "priority": 80,
+      "program": "search_shard.cpp",
+      "execution_target": "browser_worker",
+      "uses_artifacts": ["cities"],
+      "args": [{ "seed_offset": 6, "timeout_ms": 5000 }],
+      "replication_factor": 1,
+      "result_schema": { "output": { "type": "object", "required": true } },
+      "reward_usdc": "0.02"
+    },
+    {
+      "id": "search-shard-7",
+      "depends_on": ["plan-search"],
+      "priority": 80,
+      "program": "search_shard.cpp",
+      "execution_target": "browser_worker",
+      "uses_artifacts": ["cities"],
+      "args": [{ "seed_offset": 7, "timeout_ms": 5000 }],
+      "replication_factor": 1,
+      "result_schema": { "output": { "type": "object", "required": true } },
+      "reward_usdc": "0.02"
+    },
+    {
+      "id": "verify-best",
+      "depends_on": [
+        "search-shard-0", "search-shard-1", "search-shard-2", "search-shard-3",
+        "search-shard-4", "search-shard-5", "search-shard-6", "search-shard-7"
+      ],
+      "priority": 70,
+      "program": "verify_best.cpp",
+      "execution_target": "browser_worker",
+      "args": [{}],
+      "replication_factor": 3,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": { "type": "object", "required": true }
+      },
+      "reward_usdc": "0.05"
+    },
+    {
+      "id": "write-solution",
+      "depends_on": [
+        "verify-best", "read-cities",
+        "search-shard-0", "search-shard-1", "search-shard-2", "search-shard-3",
+        "search-shard-4", "search-shard-5", "search-shard-6", "search-shard-7"
+      ],
+      "priority": 60,
+      "program": "write_solution.cpp",
+      "execution_target": "server",
+      "uses_artifacts": ["cities"],
+      "output_artifacts": [
+        { "id": "solution", "file": "tour_solution.txt" }
+      ],
+      "args": [{}],
+      "result_schema": {
+        "output": { "type": "object", "required": true }
+      },
+      "reward_usdc": "0.00"
+    }
+  ]
+}
