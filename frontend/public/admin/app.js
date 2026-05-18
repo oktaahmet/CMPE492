@@ -8,6 +8,7 @@ const workflowSelect = document.getElementById("workflowSelect");
 const workflowJsonInput = document.getElementById("workflowJsonInput");
 const cppFilesInput = document.getElementById("cppFilesInput");
 const workflowInputFilesInput = document.getElementById("workflowInputFilesInput");
+const workflowJsonList = document.getElementById("workflowJsonList");
 const cppFilesList = document.getElementById("cppFilesList");
 const workflowInputFilesList = document.getElementById("workflowInputFilesList");
 const topologyModeSelect = document.getElementById("topologyModeSelect");
@@ -101,6 +102,22 @@ function renderSelectedCppFiles() {
     item.textContent = file.name;
     cppFilesList.appendChild(item);
   }
+}
+
+function renderWorkflowJsonFile() {
+  if (!workflowJsonList) {
+    return;
+  }
+  workflowJsonList.innerHTML = "";
+
+  const file = workflowJsonInput.files[0];
+  if (!file) {
+    return;
+  }
+
+  const item = document.createElement("li");
+  item.textContent = `${file.name} (${formatBytes(file.size)})`;
+  workflowJsonList.appendChild(item);
 }
 
 function renderWorkflowInputFiles() {
@@ -222,6 +239,7 @@ async function uploadWorkflow() {
     workflowJsonInput.value = "";
     selectedCppFiles.clear();
     selectedWorkflowInputFiles.clear();
+    renderWorkflowJsonFile();
     renderSelectedCppFiles();
     renderWorkflowInputFiles();
     await refreshWorkflows({ quiet: true });
@@ -322,6 +340,10 @@ authForm.addEventListener("submit", (event) => {
   void unlock();
 });
 
+workflowJsonInput.addEventListener("change", () => {
+  renderWorkflowJsonFile();
+});
+
 cppFilesInput.addEventListener("change", () => {
   for (const file of cppFilesInput.files) {
     selectedCppFiles.set(cppFileKey(file), file);
@@ -371,5 +393,6 @@ clearOutputBtn.addEventListener("click", () => {
 });
 
 renderSelectedCppFiles();
+renderWorkflowJsonFile();
 renderWorkflowInputFiles();
 setUnlocked(false);

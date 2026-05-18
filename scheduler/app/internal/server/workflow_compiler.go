@@ -182,11 +182,13 @@ func sourceForWasmOutput(relOut string, sourceMap map[string]string) (string, er
 }
 
 func compileCPPToWasmIfNeeded(sourcePath, outputPath string) error {
+	commonIncludeDir := filepath.Join("workflows", "common")
 	return compileCommandIfInputsChanged(
 		[]string{sourcePath},
 		outputPath,
 		"emcc",
 		sourcePath,
+		"-I", commonIncludeDir,
 		"-O3",
 		"-s", "STANDALONE_WASM=1",
 		"-s", "ALLOW_MEMORY_GROWTH=1",
@@ -200,12 +202,14 @@ func compileCPPToWasmIfNeeded(sourcePath, outputPath string) error {
 
 func compileCPPToNativeIfNeeded(sourcePath, outputPath string) error {
 	runnerPath := filepath.Join("workflows", "common", "native_json_runner.cpp")
+	commonIncludeDir := filepath.Join("workflows", "common")
 	return compileCommandIfInputsChanged(
 		[]string{sourcePath, runnerPath},
 		outputPath,
 		"g++",
 		sourcePath,
 		runnerPath,
+		"-I", commonIncludeDir,
 		"-std=c++17",
 		"-O3",
 		"-o", outputPath,
