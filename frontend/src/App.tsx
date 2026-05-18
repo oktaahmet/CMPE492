@@ -60,6 +60,8 @@ type DiscoveredWallet = {
   provider: EIP1193Provider;
 };
 
+type AppRoute = "worker" | "payments" | "runtime";
+
 function walletKey(info: EIP6963ProviderInfo): string {
   return info.rdns ?? info.uuid ?? info.name ?? "";
 }
@@ -131,16 +133,38 @@ async function signWalletMessage(
   throw new Error("wallet signature missing");
 }
 
+function routeFromPath(pathname: string): AppRoute {
+  if (pathname === "/payments") return "payments";
+  if (pathname === "/runtime") return "runtime";
+  return "worker";
+}
+
+function pathForRoute(route: AppRoute): string {
+  if (route === "payments") return "/payments";
+  if (route === "runtime") return "/runtime";
+  return "/";
+}
+
+function canonicalizeRouteURL(): AppRoute {
+  const currentRoute = routeFromPath(window.location.pathname);
+  const canonicalPath = pathForRoute(currentRoute);
+  const shouldReplace =
+    window.location.pathname !== canonicalPath ||
+    window.location.hash !== "";
+
+  if (shouldReplace) {
+    window.history.replaceState(null, "", `${canonicalPath}${window.location.search}`);
+  }
+
+  return currentRoute;
+}
+
 export default function App() {
   const autoWorkerModeRef = useRef(isAutoWorkerMode());
   const autoWorkerMode = autoWorkerModeRef.current;
   const initialAuthSessionRef = useRef<WorkerAuthSession | null>(getWorkerAuthSession());
   const initialAuthSession = initialAuthSessionRef.current;
-  const [route, setRoute] = useState<"worker" | "payments" | "runtime">(() => {
-    if (window.location.hash === "#/payments") return "payments";
-    if (window.location.hash === "#/runtime") return "runtime";
-    return "worker";
-  });
+  const [route, setRoute] = useState<AppRoute>(() => canonicalizeRouteURL());
   const [assignmentText, setAssignmentText] = useState("");
   const [logText, setLogText] = useState("");
   const [workerId, setWorkerId] = useState(initialAuthSession?.worker_id ?? "");
@@ -197,16 +221,12 @@ export default function App() {
     setWalletStatus(`wallet: verified ${session.worker_id}`);
   }, []);
 
-  const navigate = (next: "worker" | "payments" | "runtime") => {
-    if (next === "payments") {
-      window.location.hash = "/payments";
-      return;
+  const navigate = (next: AppRoute) => {
+    const path = pathForRoute(next);
+    if (window.location.pathname !== path || window.location.hash !== "") {
+      window.history.pushState(null, "", `${path}${window.location.search}`);
     }
-    if (next === "runtime") {
-      window.location.hash = "/runtime";
-      return;
-    }
-    window.location.hash = "/";
+    setRoute(next);
   };
 
   const detectProvider = () => {
@@ -464,20 +484,12 @@ export default function App() {
 
   useEffect(() => {
     const syncRoute = () => {
-      if (window.location.hash === "#/payments") {
-        setRoute("payments");
-        return;
-      }
-      if (window.location.hash === "#/runtime") {
-        setRoute("runtime");
-        return;
-      }
-      setRoute("worker");
+      setRoute(canonicalizeRouteURL());
     };
-    window.addEventListener("hashchange", syncRoute);
+    window.addEventListener("popstate", syncRoute);
     syncRoute();
     return () => {
-      window.removeEventListener("hashchange", syncRoute);
+      window.removeEventListener("popstate", syncRoute);
     };
   }, []);
 

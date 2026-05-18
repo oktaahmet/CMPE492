@@ -5,7 +5,7 @@ This folder contains the Playwright-based browser worker launcher. It is separat
 
 - launches a real Chromium browser with Playwright
 - opens many pages against your frontend
-- each page loads `?auto_worker=1#/`
+- each page loads `?auto_worker=1`
 - each page auto-generates a random `0x...` worker id and starts working
 
 ## Install
@@ -33,5 +33,5 @@ npm run workers:browser -- --count 10 --stagger-ms 500
 By default the script targets:
 
 ```text
-http://127.0.0.1:5173/?auto_worker=1#/
+http://127.0.0.1:5173/?auto_worker=1
 ```
