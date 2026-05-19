@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Wallet, RefreshCw, ListChecks } from "lucide-react";
+import { RefreshCw, ListChecks } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchPayments, type PaymentEvent } from "@/lib/api";
 
 type PaymentsHistoryPageProps = {
   workerId: string;
-  walletStatus: string;
-  onConnectWallet: () => Promise<void> | void;
 };
 
 function isValidWallet(value: string): boolean {
@@ -41,7 +38,7 @@ function formatDate(input: string): string {
 }
 
 export function PaymentsHistoryPage(props: PaymentsHistoryPageProps) {
-  const { workerId, walletStatus, onConnectWallet } = props;
+  const { workerId } = props;
   const [payments, setPayments] = useState<PaymentEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -93,39 +90,6 @@ export function PaymentsHistoryPage(props: PaymentsHistoryPageProps) {
 
   return (
     <>
-      <Card className="border-border/70 bg-card/90 backdrop-blur">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Wallet className="size-4" />
-            Payment Wallet
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Input
-            id="paymentWorkerId"
-            value={workerId}
-            readOnly
-            className="font-mono text-xs sm:text-sm"
-            placeholder="Connect wallet to load your payment history"
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{walletStatus}</Badge>
-            <Button type="button" variant="default" onClick={() => void onConnectWallet()}>
-              Connect Wallet
-            </Button>
-            <Button type="button" variant="secondary" onClick={() => void loadPayments()} disabled={loading}>
-              <RefreshCw className="size-4" />
-              Refresh
-            </Button>
-          </div>
-          {error ? (
-            <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {error}
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
-
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card className="border-border/70 bg-card/90 backdrop-blur">
           <CardHeader><CardTitle className="text-sm">Total Records</CardTitle></CardHeader>
@@ -147,8 +111,19 @@ export function PaymentsHistoryPage(props: PaymentsHistoryPageProps) {
             <ListChecks className="size-4" />
             Payment History
           </CardTitle>
+          <CardAction>
+            <Button type="button" variant="secondary" onClick={() => void loadPayments()} disabled={loading}>
+              <RefreshCw className="size-4" />
+              Refresh
+            </Button>
+          </CardAction>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          {error ? (
+            <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
           {loading ? (
             <div className="text-sm text-muted-foreground">Loading payment history...</div>
           ) : payments.length === 0 ? (

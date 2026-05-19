@@ -2,6 +2,9 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
+ARG VITE_WORKER_LOOP_DELAY_MS=0
+ENV VITE_WORKER_LOOP_DELAY_MS=$VITE_WORKER_LOOP_DELAY_MS
+
 COPY package*.json ./
 RUN npm ci
 

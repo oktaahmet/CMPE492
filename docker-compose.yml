@@ -38,6 +38,7 @@ services:
       dockerfile: Dockerfile
     environment:
       VITE_API_PROXY_TARGET: http://scheduler:8080
+      VITE_WORKER_LOOP_DELAY_MS: ${VITE_WORKER_LOOP_DELAY_MS:-0}
     ports:
       - "5173:5173"
     volumes:

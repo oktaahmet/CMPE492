@@ -40,6 +40,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
+      args:
+        VITE_WORKER_LOOP_DELAY_MS: ${VITE_WORKER_LOOP_DELAY_MS:-0}
     restart: unless-stopped
     depends_on:
       scheduler:

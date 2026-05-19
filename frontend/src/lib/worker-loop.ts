@@ -283,6 +283,7 @@ export async function runWorkerOnce(deps: RunOnceDeps): Promise<void> {
 
   const assignment = await pullAssignment(workerAddress);
   if (!assignment) {
+    deps.setAssignmentText("");
     deps.log("No job available");
     return;
   }

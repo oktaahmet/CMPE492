@@ -353,7 +353,7 @@ export function LiveRuntimePage() {
           <CardTitle className="flex flex-wrap items-center gap-3 text-base sm:text-lg">
             <span className="flex items-center gap-2">
               <Network className="size-4" />
-              Live Scheduler
+              Live Workflow
             </span>
             <Badge variant="outline" className="font-mono text-[11px]">
               workflow={runtime?.active_workflow_id || runtime?.loaded_workflow_id || "-"}
