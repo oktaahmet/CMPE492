@@ -3,7 +3,6 @@ import {
   fetchWorkflowNodeOutputChunk,
   type JsonObject,
   pullAssignment,
-  registerWorker,
   submitResult,
 } from "./api";
 import { buildExecutionContext, type ExecutionContext } from "./dependency-loader";
@@ -15,6 +14,8 @@ export type WasmWorkerResponse = {
   result_sig?: string;
   error?: string;
 };
+
+export type WorkerLoopResult = "job_completed" | "no_job";
 
 const WASM_WORKER_TIMEOUT_MS = 45_000;
 
@@ -273,19 +274,17 @@ async function maybeRunSyntheticJob(assignment: Assignment): Promise<WasmWorkerR
   );
 }
 
-export async function runWorkerOnce(deps: RunOnceDeps): Promise<void> {
+export async function runWorkerOnce(deps: RunOnceDeps): Promise<WorkerLoopResult> {
   const workerAddress = deps.workerID.trim();
   if (!workerAddress.startsWith("0x") || workerAddress.length < 10) {
     throw new Error("worker_id must be wallet address (0x...)");
   }
 
-  await registerWorker(workerAddress);
-
   const assignment = await pullAssignment(workerAddress);
   if (!assignment) {
     deps.setAssignmentText("");
     deps.log("No job available");
-    return;
+    return "no_job";
   }
 
   const assignmentForLog = compactAssignmentForLog(assignment);
@@ -321,4 +320,5 @@ export async function runWorkerOnce(deps: RunOnceDeps): Promise<void> {
   }
   const decision = await submitResult(assignment.job_id, workerAddress, wasmResult.result_sig, resultPayload);
   deps.log("Result submitted", compactDecisionForLog(decision as Record<string, unknown>));
+  return "job_completed";
 }

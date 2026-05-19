@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchWorkflowNodeOutputChunk,
   pullAssignment,
-  registerWorker,
   submitResult,
   type Assignment,
 } from "../api";
@@ -23,7 +22,6 @@ vi.mock("../dependency-loader", () => ({
 
 const mockedFetchChunk = vi.mocked(fetchWorkflowNodeOutputChunk);
 const mockedPullAssignment = vi.mocked(pullAssignment);
-const mockedRegisterWorker = vi.mocked(registerWorker);
 const mockedSubmitResult = vi.mocked(submitResult);
 const mockedBuildExecutionContext = vi.mocked(buildExecutionContext);
 
@@ -85,7 +83,6 @@ describe("runWorkerOnce", () => {
       setTimeout: globalThis.setTimeout,
       clearTimeout: globalThis.clearTimeout,
     });
-    mockedRegisterWorker.mockResolvedValue({ ok: true });
     mockedSubmitResult.mockResolvedValue({ finalized: true });
     mockedBuildExecutionContext.mockResolvedValue({
       args: [],
@@ -99,19 +96,18 @@ describe("runWorkerOnce", () => {
       "worker_id must be wallet address",
     );
 
-    expect(mockedRegisterWorker).not.toHaveBeenCalled();
     expect(mockedPullAssignment).not.toHaveBeenCalled();
   });
 
-  it("registers and exits quietly when no job is available", async () => {
+  it("exits quietly when no job is available", async () => {
     mockedPullAssignment.mockResolvedValueOnce(null);
     const runDeps = deps();
 
-    await runWorkerOnce(runDeps);
+    await expect(runWorkerOnce(runDeps)).resolves.toBe("no_job");
 
-    expect(mockedRegisterWorker).toHaveBeenCalledWith(workerID);
     expect(mockedPullAssignment).toHaveBeenCalledWith(workerID);
     expect(runDeps.log).toHaveBeenCalledWith("No job available");
+    expect(runDeps.setAssignmentText).toHaveBeenCalledWith("");
     expect(runDeps.ensureWasmWorker).not.toHaveBeenCalled();
     expect(mockedSubmitResult).not.toHaveBeenCalled();
   });
@@ -123,7 +119,7 @@ describe("runWorkerOnce", () => {
       ensureWasmWorker: vi.fn(() => fakeWorker as unknown as Worker),
     });
 
-    await runWorkerOnce(runDeps);
+    await expect(runWorkerOnce(runDeps)).resolves.toBe("job_completed");
 
     expect(mockedBuildExecutionContext).toHaveBeenCalledWith(expect.objectContaining({ job_id: "job-1" }), runDeps.log);
     expect(fakeWorker.postedMessages).toHaveLength(1);

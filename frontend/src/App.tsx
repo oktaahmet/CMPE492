@@ -61,7 +61,13 @@ type DiscoveredWallet = {
 
 type AppRoute = "worker" | "payments" | "runtime";
 
-const WORKER_LOOP_DELAY_MS = readNonNegativeEnvInt(import.meta.env.VITE_WORKER_LOOP_DELAY_MS, 0);
+const WORKER_BUSY_LOOP_DELAY_MS = readNonNegativeEnvInt(import.meta.env.VITE_WORKER_BUSY_LOOP_DELAY_MS, 0);
+const WORKER_IDLE_DELAY_INITIAL_MS = readNonNegativeEnvInt(import.meta.env.VITE_WORKER_IDLE_DELAY_INITIAL_MS, 250);
+const WORKER_IDLE_DELAY_MAX_MS = Math.max(
+  WORKER_IDLE_DELAY_INITIAL_MS,
+  readNonNegativeEnvInt(import.meta.env.VITE_WORKER_IDLE_DELAY_MAX_MS, 5000),
+);
+const WORKER_IDLE_DELAY_MULTIPLIER = readMinEnvNumber(import.meta.env.VITE_WORKER_IDLE_DELAY_MULTIPLIER, 2, 1);
 
 function walletKey(info: EIP6963ProviderInfo): string {
   return info.rdns ?? info.uuid ?? info.name ?? "";
@@ -92,6 +98,14 @@ function compactWalletStatus(status: string): string {
 function readNonNegativeEnvInt(raw: unknown, fallback: number): number {
   const value = typeof raw === "string" ? Number.parseInt(raw, 10) : Number.NaN;
   if (!Number.isFinite(value) || value < 0) {
+    return fallback;
+  }
+  return value;
+}
+
+function readMinEnvNumber(raw: unknown, fallback: number, min: number): number {
+  const value = typeof raw === "string" ? Number.parseFloat(raw) : Number.NaN;
+  if (!Number.isFinite(value) || value < min) {
     return fallback;
   }
   return value;
@@ -220,6 +234,7 @@ export default function App() {
   const loopTimerRef = useRef<number | undefined>(undefined);
   const heartbeatTimerRef = useRef<number | undefined>(undefined);
   const discoveredProviderRef = useRef<EIP1193Provider | null>(null);
+  const idleDelayRef = useRef(WORKER_IDLE_DELAY_INITIAL_MS);
 
   const log = useCallback((message: string, obj?: unknown) => {
     const line = obj === undefined ? message : `${message} ${safeStringify(obj)}`;
@@ -288,6 +303,7 @@ export default function App() {
   const stopWorking = useCallback(() => {
     runningRef.current = false;
     setStatus("idle");
+    idleDelayRef.current = WORKER_IDLE_DELAY_INITIAL_MS;
 
     if (loopTimerRef.current !== undefined) {
       window.clearTimeout(loopTimerRef.current);
@@ -314,23 +330,42 @@ export default function App() {
       return;
     }
 
+    let nextLoopDelay = WORKER_IDLE_DELAY_INITIAL_MS;
+    let advanceIdleDelay = false;
     try {
       setStatus("working");
-      await runWorkerOnce({
+      const result = await runWorkerOnce({
         workerID: walletAddress(),
         ensureWasmWorker,
         resetWasmWorker,
         log,
         setAssignmentText,
       });
+      if (result === "job_completed") {
+        idleDelayRef.current = WORKER_IDLE_DELAY_INITIAL_MS;
+        nextLoopDelay = WORKER_BUSY_LOOP_DELAY_MS;
+        setStatus("working");
+      } else {
+        nextLoopDelay = idleDelayRef.current;
+        advanceIdleDelay = true;
+        setStatus("idle");
+      }
     } catch (error) {
       handleWorkerAuthFailure("Worker loop error", error);
+      nextLoopDelay = idleDelayRef.current;
+      advanceIdleDelay = true;
       setStatus("error");
     } finally {
       if (runningRef.current) {
+        if (advanceIdleDelay && nextLoopDelay > 0) {
+          idleDelayRef.current = Math.min(
+            Math.ceil(nextLoopDelay * WORKER_IDLE_DELAY_MULTIPLIER),
+            WORKER_IDLE_DELAY_MAX_MS,
+          );
+        }
         loopTimerRef.current = window.setTimeout(() => {
           void workLoop();
-        }, WORKER_LOOP_DELAY_MS);
+        }, nextLoopDelay);
       }
     }
   }, [ensureWasmWorker, handleWorkerAuthFailure, log, resetWasmWorker]);
