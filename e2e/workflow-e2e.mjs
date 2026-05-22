@@ -322,7 +322,7 @@ async function assertRuntimePage(context, baseUrl, timeoutMs) {
     waitUntil: "networkidle",
     timeout: timeoutMs,
   });
-  await page.getByText("Live Scheduler").waitFor({ timeout: timeoutMs });
+  await page.getByText("Live Workflow").waitFor({ timeout: timeoutMs });
   await page.getByText("Workflow Graph").waitFor({ timeout: timeoutMs });
   await page.getByText("Queued Jobs").waitFor({ timeout: timeoutMs });
 
