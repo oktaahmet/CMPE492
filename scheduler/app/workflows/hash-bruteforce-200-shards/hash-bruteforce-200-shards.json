@@ -1,0 +1,47 @@
+{
+  "id": "wf-hash-bruteforce-200-shards",
+  "nodes": [
+    {
+      "id": "bruteforce-shard",
+      "program": "bruteforce_shard.cpp",
+      "execution_target": "browser_worker",
+      "shard_count": 200,
+      "args": [
+        {
+          "target_hash": "46b767e5bc4bb693a2d9bbefb9b259f7f73b304cc0e82241ecea9aa9011ce94a",
+          "range_size": 1544579
+        }
+      ],
+      "replication_factor": 3,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.03"
+    },
+    {
+      "id": "bruteforce-result",
+      "depends_on": [
+        "bruteforce-shard"
+      ],
+      "program": "bruteforce_reduce.cpp",
+      "execution_target": "server",
+      "args": [
+        {
+          "target_hash": "46b767e5bc4bb693a2d9bbefb9b259f7f73b304cc0e82241ecea9aa9011ce94a",
+          "shard_count": 200
+        }
+      ],
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    }
+  ]
+}

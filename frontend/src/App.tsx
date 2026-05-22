@@ -3,7 +3,6 @@ import { Activity, ClipboardList, Network, Play, Square, Wallet, Waves } from "l
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   AlertDialog,
@@ -60,6 +59,16 @@ type DiscoveredWallet = {
   provider: EIP1193Provider;
 };
 
+type AppRoute = "worker" | "payments" | "runtime";
+
+const WORKER_BUSY_LOOP_DELAY_MS = readNonNegativeEnvInt(import.meta.env.VITE_WORKER_BUSY_LOOP_DELAY_MS, 0);
+const WORKER_IDLE_DELAY_INITIAL_MS = readNonNegativeEnvInt(import.meta.env.VITE_WORKER_IDLE_DELAY_INITIAL_MS, 250);
+const WORKER_IDLE_DELAY_MAX_MS = Math.max(
+  WORKER_IDLE_DELAY_INITIAL_MS,
+  readNonNegativeEnvInt(import.meta.env.VITE_WORKER_IDLE_DELAY_MAX_MS, 5000),
+);
+const WORKER_IDLE_DELAY_MULTIPLIER = readMinEnvNumber(import.meta.env.VITE_WORKER_IDLE_DELAY_MULTIPLIER, 2, 1);
+
 function walletKey(info: EIP6963ProviderInfo): string {
   return info.rdns ?? info.uuid ?? info.name ?? "";
 }
@@ -67,7 +76,6 @@ function walletKey(info: EIP6963ProviderInfo): string {
 declare global {
   interface Window {
     ethereum?: EIP1193Provider;
-    coinbaseWalletExtension?: EIP1193Provider;
   }
 }
 
@@ -81,6 +89,51 @@ function safeStringify(value: unknown): string {
 
 function isWalletAddress(value: string): boolean {
   return value.startsWith("0x") && value.length >= 42;
+}
+
+function compactWalletStatus(status: string): string {
+  return status.replace(/\s0x[a-fA-F0-9]{40}/g, "").trim();
+}
+
+function readNonNegativeEnvInt(raw: unknown, fallback: number): number {
+  const value = typeof raw === "string" ? Number.parseInt(raw, 10) : Number.NaN;
+  if (!Number.isFinite(value) || value < 0) {
+    return fallback;
+  }
+  return value;
+}
+
+function readMinEnvNumber(raw: unknown, fallback: number, min: number): number {
+  const value = typeof raw === "string" ? Number.parseFloat(raw) : Number.NaN;
+  if (!Number.isFinite(value) || value < min) {
+    return fallback;
+  }
+  return value;
+}
+
+function workerStatusClass(status: string): string {
+  switch (status) {
+    case "working":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "error":
+      return "border-red-200 bg-red-50 text-red-700";
+    default:
+      return "border-sky-200 bg-sky-50 text-sky-700";
+  }
+}
+
+function walletStatusClass(status: string): string {
+  const normalized = status.toLowerCase();
+  if (normalized.includes("verified")) {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+  if (normalized.includes("auto worker")) {
+    return "border-cyan-200 bg-cyan-50 text-cyan-700";
+  }
+  if (normalized.includes("failed") || normalized.includes("expired") || normalized.includes("not verified")) {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+  return "border-slate-200 bg-slate-50 text-slate-600";
 }
 
 function isAuthorizationError(error: unknown): boolean {
@@ -131,16 +184,38 @@ async function signWalletMessage(
   throw new Error("wallet signature missing");
 }
 
+function routeFromPath(pathname: string): AppRoute {
+  if (pathname === "/payments") return "payments";
+  if (pathname === "/runtime") return "runtime";
+  return "worker";
+}
+
+function pathForRoute(route: AppRoute): string {
+  if (route === "payments") return "/payments";
+  if (route === "runtime") return "/runtime";
+  return "/";
+}
+
+function canonicalizeRouteURL(): AppRoute {
+  const currentRoute = routeFromPath(window.location.pathname);
+  const canonicalPath = pathForRoute(currentRoute);
+  const shouldReplace =
+    window.location.pathname !== canonicalPath ||
+    window.location.hash !== "";
+
+  if (shouldReplace) {
+    window.history.replaceState(null, "", `${canonicalPath}${window.location.search}`);
+  }
+
+  return currentRoute;
+}
+
 export default function App() {
   const autoWorkerModeRef = useRef(isAutoWorkerMode());
   const autoWorkerMode = autoWorkerModeRef.current;
   const initialAuthSessionRef = useRef<WorkerAuthSession | null>(getWorkerAuthSession());
   const initialAuthSession = initialAuthSessionRef.current;
-  const [route, setRoute] = useState<"worker" | "payments" | "runtime">(() => {
-    if (window.location.hash === "#/payments") return "payments";
-    if (window.location.hash === "#/runtime") return "runtime";
-    return "worker";
-  });
+  const [route, setRoute] = useState<AppRoute>(() => canonicalizeRouteURL());
   const [assignmentText, setAssignmentText] = useState("");
   const [logText, setLogText] = useState("");
   const [workerId, setWorkerId] = useState(initialAuthSession?.worker_id ?? "");
@@ -159,6 +234,7 @@ export default function App() {
   const loopTimerRef = useRef<number | undefined>(undefined);
   const heartbeatTimerRef = useRef<number | undefined>(undefined);
   const discoveredProviderRef = useRef<EIP1193Provider | null>(null);
+  const idleDelayRef = useRef(WORKER_IDLE_DELAY_INITIAL_MS);
 
   const log = useCallback((message: string, obj?: unknown) => {
     const line = obj === undefined ? message : `${message} ${safeStringify(obj)}`;
@@ -170,19 +246,6 @@ export default function App() {
   const isAutoWorkerReady = autoWorkerMode && isWalletAddressValid;
   const isWalletVerified =
     authSession !== null && authSession.worker_id.toLowerCase() === walletAddress().toLowerCase();
-
-  const statusBadgeVariant = () => {
-    switch (status) {
-      case "working":
-        return "default" as const;
-      case "error":
-        return "destructive" as const;
-      case "stopped":
-        return "outline" as const;
-      default:
-        return "secondary" as const;
-    }
-  };
 
   const clearAuthState = useCallback((nextStatus?: string) => {
     clearWorkerAuthSession();
@@ -197,16 +260,12 @@ export default function App() {
     setWalletStatus(`wallet: verified ${session.worker_id}`);
   }, []);
 
-  const navigate = (next: "worker" | "payments" | "runtime") => {
-    if (next === "payments") {
-      window.location.hash = "/payments";
-      return;
+  const navigate = (next: AppRoute) => {
+    const path = pathForRoute(next);
+    if (window.location.pathname !== path || window.location.hash !== "") {
+      window.history.pushState(null, "", `${path}${window.location.search}`);
     }
-    if (next === "runtime") {
-      window.location.hash = "/runtime";
-      return;
-    }
-    window.location.hash = "/";
+    setRoute(next);
   };
 
   const detectProvider = () => {
@@ -219,9 +278,6 @@ export default function App() {
         return ethereum.providers[0];
       }
       return ethereum;
-    }
-    if (window.coinbaseWalletExtension) {
-      return window.coinbaseWalletExtension;
     }
     return null;
   };
@@ -246,7 +302,8 @@ export default function App() {
 
   const stopWorking = useCallback(() => {
     runningRef.current = false;
-    setStatus("stopped");
+    setStatus("idle");
+    idleDelayRef.current = WORKER_IDLE_DELAY_INITIAL_MS;
 
     if (loopTimerRef.current !== undefined) {
       window.clearTimeout(loopTimerRef.current);
@@ -273,23 +330,42 @@ export default function App() {
       return;
     }
 
+    let nextLoopDelay = WORKER_IDLE_DELAY_INITIAL_MS;
+    let advanceIdleDelay = false;
     try {
       setStatus("working");
-      await runWorkerOnce({
+      const result = await runWorkerOnce({
         workerID: walletAddress(),
         ensureWasmWorker,
         resetWasmWorker,
         log,
         setAssignmentText,
       });
+      if (result === "job_completed") {
+        idleDelayRef.current = WORKER_IDLE_DELAY_INITIAL_MS;
+        nextLoopDelay = WORKER_BUSY_LOOP_DELAY_MS;
+        setStatus("working");
+      } else {
+        nextLoopDelay = idleDelayRef.current;
+        advanceIdleDelay = true;
+        setStatus("idle");
+      }
     } catch (error) {
       handleWorkerAuthFailure("Worker loop error", error);
+      nextLoopDelay = idleDelayRef.current;
+      advanceIdleDelay = true;
       setStatus("error");
     } finally {
       if (runningRef.current) {
+        if (advanceIdleDelay && nextLoopDelay > 0) {
+          idleDelayRef.current = Math.min(
+            Math.ceil(nextLoopDelay * WORKER_IDLE_DELAY_MULTIPLIER),
+            WORKER_IDLE_DELAY_MAX_MS,
+          );
+        }
         loopTimerRef.current = window.setTimeout(() => {
           void workLoop();
-        }, 1800);
+        }, nextLoopDelay);
       }
     }
   }, [ensureWasmWorker, handleWorkerAuthFailure, log, resetWasmWorker]);
@@ -341,7 +417,6 @@ export default function App() {
     if (!fallback) {
       log("No wallet extension found", {
         ethereum: Boolean(window.ethereum),
-        coinbase_wallet_extension: Boolean(window.coinbaseWalletExtension),
         eip6963_discovered: Boolean(discoveredProviderRef.current),
       });
       return;
@@ -355,7 +430,7 @@ export default function App() {
     }
 
     runningRef.current = true;
-    setStatus("starting");
+    setStatus("working");
 
     heartbeatTimerRef.current = window.setInterval(() => {
       void registerWorker(walletAddress()).catch((error) => {
@@ -429,7 +504,6 @@ export default function App() {
 
     log("UI initialized", {
       ethereum_injected: Boolean(window.ethereum),
-      coinbase_wallet_extension: Boolean(window.coinbaseWalletExtension),
       worker_auth_restored: Boolean(initialAuthSession),
     });
 
@@ -464,20 +538,12 @@ export default function App() {
 
   useEffect(() => {
     const syncRoute = () => {
-      if (window.location.hash === "#/payments") {
-        setRoute("payments");
-        return;
-      }
-      if (window.location.hash === "#/runtime") {
-        setRoute("runtime");
-        return;
-      }
-      setRoute("worker");
+      setRoute(canonicalizeRouteURL());
     };
-    window.addEventListener("hashchange", syncRoute);
+    window.addEventListener("popstate", syncRoute);
     syncRoute();
     return () => {
-      window.removeEventListener("hashchange", syncRoute);
+      window.removeEventListener("popstate", syncRoute);
     };
   }, []);
 
@@ -490,16 +556,38 @@ export default function App() {
       <div className="relative mx-auto flex w-full max-w-368 flex-col gap-4">
         <Card className="border-border/70 bg-card/90 backdrop-blur">
           <CardHeader className="gap-3">
-            <CardTitle className="flex items-center gap-2 text-2xl">
-              <Waves className="size-5" />
-              Browser Worker Interface
+            <CardTitle className="flex flex-wrap items-center gap-3 text-2xl">
+              <Waves className="size-5 text-cyan-700" />
+              <span>Browser Worker Interface</span>
+              <Button
+                onClick={() => void connectWallet()}
+                type="button"
+                variant="default"
+                disabled={autoWorkerMode}
+                className="ml-0 text-sm sm:ml-3"
+              >
+                <Wallet className="size-4" />
+                Connect Wallet
+              </Button>
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center gap-2">
-            <Badge variant={statusBadgeVariant()} className="uppercase">
+            <Badge variant="outline" className={`uppercase ${workerStatusClass(status)}`}>
               {status}
             </Badge>
-            <Badge variant="outline">{walletStatus}</Badge>
+            <Badge variant="outline" className={walletStatusClass(walletStatus)}>
+              {compactWalletStatus(walletStatus)}
+            </Badge>
+            {workerId.trim() ? (
+              <Badge
+                variant="outline"
+                className="max-w-full truncate border-slate-200 bg-slate-50 font-mono normal-case text-slate-700"
+              >
+                {workerId}
+              </Badge>
+            ) : null}
+            <input type="hidden" id="workerId" value={workerId} readOnly />
+
             <Button
               type="button"
               variant={route === "worker" ? "default" : "outline"}
@@ -520,7 +608,7 @@ export default function App() {
               onClick={() => navigate("runtime")}
             >
               <Network className="size-4" />
-              Runtime
+              Live Workflow
             </Button>
           </CardContent>
         </Card>
@@ -531,22 +619,12 @@ export default function App() {
               <Card className="border-border/70 bg-card/90 backdrop-blur">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-base">
-                    <Wallet className="size-4" />
-                    Worker Identity
+                    <Activity className="size-4" />
+                    Worker Controls
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <Input
-                    id="workerId"
-                    value={workerId}
-                    readOnly
-                    className="font-mono text-xs sm:text-sm"
-                    placeholder="Connect wallet to verify address ownership"
-                  />
                   <div className="flex flex-wrap gap-2">
-                    <Button onClick={() => void connectWallet()} type="button" variant="default" disabled={autoWorkerMode}>
-                      Connect Wallet
-                    </Button>
                     <Button
                       onClick={startWorking}
                       type="button"
@@ -603,11 +681,7 @@ export default function App() {
             </Card>
           </>
         ) : route === "payments" ? (
-          <PaymentsHistoryPage
-            workerId={workerId}
-            walletStatus={walletStatus}
-            onConnectWallet={connectWallet}
-          />
+          <PaymentsHistoryPage workerId={workerId} />
         ) : (
           <LiveRuntimePage />
         )}

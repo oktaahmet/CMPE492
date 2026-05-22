@@ -49,7 +49,8 @@ function parseArgs(argv) {
 function buildWorkerUrl(baseUrl) {
   const url = new URL(baseUrl);
   url.searchParams.set("auto_worker", "1");
-  url.hash = "#/";
+  url.pathname = "/";
+  url.hash = "";
   return url.toString();
 }
 

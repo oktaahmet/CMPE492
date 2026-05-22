@@ -106,7 +106,8 @@ async function openWorkerPages(browser, baseUrl, count, staggerMs = 200) {
   const workerUrl = (() => {
     const u = new URL(baseUrl);
     u.searchParams.set("auto_worker", "1");
-    u.hash = "#/";
+    u.pathname = "/";
+    u.hash = "";
     return u.toString();
   })();
 

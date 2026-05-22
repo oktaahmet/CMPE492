@@ -220,7 +220,8 @@ function buildWorkerUrl(baseUrl, autoWorker) {
   } else {
     u.searchParams.delete("auto_worker");
   }
-  u.hash = "#/";
+  u.pathname = "/";
+  u.hash = "";
   return u.toString();
 }
 

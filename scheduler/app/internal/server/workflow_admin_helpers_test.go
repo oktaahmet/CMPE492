@@ -109,15 +109,15 @@ func TestResolveWorkflowProgramsDerivesBundledAndUploadedWasmURLs(t *testing.T) 
 	t.Parallel()
 
 	bundled, err := resolveWorkflowPrograms(scheduler.WorkflowSpec{
-		ID: "wf-composed-metrics-review-014",
+		ID: "wf-metrics-review-pipeline",
 		Nodes: []scheduler.WorkflowNode{
 			{ID: "collect-metrics", Program: "collect_metrics.cpp", RewardUSDC: "0.01"},
 		},
-	}, filepath.Join("workflows", "example-14", "example-14.json"))
+	}, filepath.Join("workflows", "metrics-review-pipeline", "metrics-review-pipeline.json"))
 	if err != nil {
 		t.Fatalf("resolve bundled program: %v", err)
 	}
-	if got := bundled.Nodes[0].WasmURL; got != "/example-14/collect_metrics.wasm?v=1" {
+	if got := bundled.Nodes[0].WasmURL; got != "/metrics-review-pipeline/collect_metrics.wasm?v=1" {
 		t.Fatalf("unexpected bundled wasm url: %q", got)
 	}
 
@@ -147,7 +147,7 @@ func TestResolveWorkflowProgramsRejectsUnsafeProgram(t *testing.T) {
 				RewardUSDC: "0.01",
 			},
 		},
-	}, filepath.Join("workflows", "example-14", "example-14.json"))
+	}, filepath.Join("workflows", "metrics-review-pipeline", "metrics-review-pipeline.json"))
 	if err == nil {
 		t.Fatalf("expected unsafe program to fail")
 	}

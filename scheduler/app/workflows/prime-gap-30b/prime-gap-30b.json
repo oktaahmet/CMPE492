@@ -1,0 +1,46 @@
+{
+  "id": "wf-prime-gap-30b",
+  "nodes": [
+    {
+      "id": "prime-gap-shard",
+      "program": "prime_gap_shard.cpp",
+      "execution_target": "browser_worker",
+      "shard_count": 30,
+      "args": [
+        {
+          "range_size": 1000000000,
+          "limit": 30000000000
+        }
+      ],
+      "replication_factor": 1,
+      "acceptance_policy": "consensus",
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.03"
+    },
+    {
+      "id": "prime-gap-result",
+      "depends_on": [
+        "prime-gap-shard"
+      ],
+      "program": "prime_gap_reduce.cpp",
+      "execution_target": "server",
+      "args": [
+        {
+          "shard_count": 30
+        }
+      ],
+      "result_schema": {
+        "output": {
+          "type": "object",
+          "required": true
+        }
+      },
+      "reward_usdc": "0.00"
+    }
+  ]
+}

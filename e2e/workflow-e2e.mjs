@@ -199,12 +199,13 @@ function urlFor(baseUrl, path) {
   return new URL(path, baseUrl).toString();
 }
 
-function frontendRoute(baseUrl, hash, params = {}) {
+function frontendRoute(baseUrl, path, params = {}) {
   const url = new URL(baseUrl);
+  url.pathname = path;
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
-  url.hash = hash;
+  url.hash = "";
   return url.toString();
 }
 
@@ -321,7 +322,6 @@ async function assertRuntimePage(context, baseUrl, timeoutMs) {
     waitUntil: "networkidle",
     timeout: timeoutMs,
   });
-  await page.getByText("Live Scheduler").waitFor({ timeout: timeoutMs });
   await page.getByText("Workflow Graph").waitFor({ timeout: timeoutMs });
   await page.getByText("Queued Jobs").waitFor({ timeout: timeoutMs });
 
