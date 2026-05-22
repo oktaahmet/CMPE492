@@ -586,6 +586,8 @@ export default function App() {
                 {workerId}
               </Badge>
             ) : null}
+            <input type="hidden" id="workerId" value={workerId} readOnly />
+
             <Button
               type="button"
               variant={route === "worker" ? "default" : "outline"}
