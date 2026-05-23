@@ -1,60 +1,42 @@
 # CMPE492
 X402 Payment Based WebAssembly Job Workflow Scheduler for Browsers
 
-# Docker Quick Start
+## Quick start (development)
 
+1. Copy the env template and fill in the required secrets:
 
-## 1. Create `.env` File
+   ```bash
+   cp .env-example .env
+   ```
 
-Create a `.env` file in the project root directory.
+   In `.env` set at minimum:
+   - `CDP_API_KEY_ID`, `CDP_PRIVATE_KEY` — from https://portal.cdp.coinbase.com/
+   - `X402_PAYER_PRIVATE_KEY` — hex private key of a wallet funded with
+     Base Sepolia USDC (get test funds at https://faucet.circle.com/)
+   - `WORKER_JWT_SECRET` — any long random string
+   - `ADMIN_API_TOKEN` — any long random string (this is also the admin
+     UI password)
 
-You can copy it from the `.env-example` file
+2. Build and start the stack:
 
-## 2. Generate Coinbase CDP API Keys
+   ```bash
+   docker compose up --build
+   ```
 
-Go to: https://portal.cdp.coinbase.com/
+3. Open the worker UI:
 
-Create a new API Key and Secret Key
+   - Worker: http://localhost:5173/
+   - Admin panel: http://localhost:5173/admin/
+   - Live workflow: http://localhost:5173/runtime
+   - Swagger API: http://localhost:8080/api/docs/
 
-Open your .env file and fill in the following values:
+## Documentation
 
-CDP_API_KEY_ID=your_api_key_here  
-CDP_PRIVATE_KEY=your_secret_key_here  
-X402_PAYER_PRIVATE_KEY=your_wallet_private_key_here
+| Page                                                                                  | For                                                                  |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [User Manual](https://github.com/oktaahmet/CMPE492/wiki/User-Manual)                  | Workers (open the site, connect a wallet, earn USDC)                 |
+| [System Manual](https://github.com/oktaahmet/CMPE492/wiki/System-Manual)              | Operators (architecture, configuration, API, admin panel) |
+| [Workflow Authoring Guide](https://github.com/oktaahmet/CMPE492/wiki/Workflow-Authoring-Guide)                          | Workflow creation, protocols, helpers, rules, examples            |
+| [Deployment](https://github.com/oktaahmet/CMPE492/wiki/Deployment)                    | Production deploy (Caddy / HTTPS, prod compose) |
+| [Testing](https://github.com/oktaahmet/CMPE492/wiki/Testing)                          | Running the tests (unit, E2E, load, benchmark)             |
 
-WORKER_JWT_SECRET=put_a-long-random-secret-here
-
-ADMIN_API_TOKEN=put-a-random-secret-token-here (this will be the password in the admin page)
-
-Note : Private key of the wallet used to send USDC test coins to workers, you can get some test USDC here(select Base Sepolia network):  https://faucet.circle.com/
-
-
-## 3. Start Services
-
-Build and start all services with Docker:
-```bash
-docker compose up --build
-```
-## 4. Open the web page
-http://localhost:5173/
-
-
-## Local Multi-Worker Test Mode
-
-If you only want to test many concurrent browser workers and wallet verification is not important for that run, use local test mode:
-
-1. Set `WORKER_AUTH_DISABLED=1` in `.env`.
-2. Start the stack with `docker compose up`.
-3. Run the Playwright helper under `automated-worker/`.
-
-In this mode:
-
-- backend skips wallet/JWT verification for worker endpoints
-- `?auto_worker=1` pages generate a random wallet-like `0x...` worker id
-- each opened page starts working automatically
-
-Important Note: This mode is intended only for local load/concurrency testing. Keep `WORKER_AUTH_DISABLED=0` for normal demos and real wallet-authenticated runs.
-
-
-## API documentation
-See at: http://localhost:8080/api/docs/
